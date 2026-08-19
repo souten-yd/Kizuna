@@ -22,6 +22,8 @@ constexpr uint8_t kVisemeSmileOpen = 7;
 
 void CharacterDirector::begin(uint32_t nowMs) {
     frame_ = FaceFrame{};
+    gesture_ = Gesture::None;
+    gestureToken_ = 0;
     scheduleBlink(nowMs, false);
     nextSaccadeMs_ = nowMs + random(appcfg::kSaccadeMinMs, appcfg::kSaccadeMaxMs);
     lastSwayMs_ = nowMs;
@@ -57,6 +59,14 @@ void CharacterDirector::setDeviceStatus(uint8_t batteryPercent, bool charging, b
     frame_.muted = muted;
 }
 
+void CharacterDirector::triggerGesture(Gesture gesture) {
+    if (gesture == Gesture::None || gesture == Gesture::Count) return;
+    gesture_ = gesture;
+    ++gestureToken_;
+    // Token zero is the power-on sentinel used by the display task.
+    if (!gestureToken_) ++gestureToken_;
+}
+
 void CharacterDirector::scheduleBlink(uint32_t nowMs, bool soon) {
     nextBlinkMs_ = nowMs + (soon ? random(120, 320)
                                  : random(appcfg::kBlinkMinMs, appcfg::kBlinkMaxMs));
@@ -84,7 +94,8 @@ void CharacterDirector::updateBlink(uint32_t nowMs) {
         blinkStep_ = 0;
         return;
     }
-    if (expression_ == Expression::Sleepy && !blinkStep_) {
+    if ((expression_ == Expression::Sleepy || expression_ == Expression::SleepyHalf ||
+         expression_ == Expression::Yawning) && !blinkStep_) {
         // Drowsy eyes drift between half and fully shut on their own clock.
         frame_.eye = ((nowMs / 1700) % 3 == 0) ? EyeFrame::SleepyClosed : EyeFrame::SleepyHalf;
         return;
@@ -150,7 +161,8 @@ uint8_t CharacterDirector::swayFpsForState() const {
         case CompanionState::Boot: return 8;
         default: break;
     }
-    if (expression_ == Expression::Sleepy) return 6;
+    if (expression_ == Expression::Sleepy || expression_ == Expression::SleepyHalf ||
+        expression_ == Expression::Yawning) return 6;
     return 12;
 }
 
@@ -189,7 +201,11 @@ void CharacterDirector::updateViseme(uint32_t nowMs) {
     // A happy face should keep smiling while it talks, so the loud visemes
     // route to the drawn smile shapes instead of the neutral ones.
     const bool smiling = expression_ == Expression::Happy || expression_ == Expression::Excited ||
-                         expression_ == Expression::Playful;
+                         expression_ == Expression::Playful || expression_ == Expression::SoftSmile ||
+                         expression_ == Expression::Laughing || expression_ == Expression::Relieved ||
+                         expression_ == Expression::Mischievous || expression_ == Expression::Peace ||
+                         expression_ == Expression::Starry || expression_ == Expression::Cozy ||
+                         expression_ == Expression::Cheerful;
     if (smiling && smoothedLip_ >= 3) {
         frame_.viseme = kVisemeSmileOpen;
     } else if (smiling && smoothedLip_ == 0) {
@@ -202,6 +218,8 @@ void CharacterDirector::updateViseme(uint32_t nowMs) {
 const FaceFrame& CharacterDirector::update(uint32_t nowMs) {
     frame_.expression = expression_;
     frame_.state = state_;
+    frame_.gesture = gesture_;
+    frame_.gestureToken = gestureToken_;
     updateBlink(nowMs);
     updateGaze(nowMs);
     updateSway(nowMs);
