@@ -89,9 +89,22 @@ Japanese gothic:
 **56 px**, then: a status strip and two lines of 16 px Japanese, which is 40
 characters - enough for the short replies this thing gives.
 
-That leaves the artwork **320 x 184**, so the part canvas is **1280 x 736**
-rather than 1280 x 960. Everything else about registration is unchanged; it is
-a shorter canvas, not a different discipline.
+That leaves the artwork **320 x 184** of the 320 x 240 screen.
+
+It does *not* mean asking for a 1280 x 736 canvas. Three deliveries in this
+project came back at 1448 x 1086 against a request for 1280 x 960 - the ratio
+exact to four decimal places, the pixel count never once right. The generator
+works in its own sizes and honours an aspect; it does not honour a resolution.
+Asking for 40:23 would be pushing that further for no gain.
+
+So: **the canvas stays 4:3 and covers the whole screen, and the band lives
+inside it.** On a 1280 x 960 canvas the band is the bottom 224 px. Nothing
+that matters goes below **y = 736**; the character is composed for the 1280 x
+736 above it.
+
+Ask for the aspect and for every file in a set to be the same size as the one
+it was edited from. Both of those the generator does reliably. The scale is
+normalised on the way in, which is a resize and cannot go wrong.
 
 The band is always there rather than appearing with text. A character that
 grows and shrinks by a quarter whenever it speaks is worse than one composed

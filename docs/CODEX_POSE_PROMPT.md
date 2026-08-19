@@ -4,6 +4,31 @@ Self-contained, like the eye and base prompts. Read
 [POSE_AND_ANGLE_SPEC.md](POSE_AND_ANGLE_SPEC.md) first; it explains why the
 layers are split the way they are, and the split is the part that matters.
 
+## Draw it large and naturally; the framing is applied afterwards
+
+Do not ask for the screen's shape. Ask for a comfortable head-and-torso
+composition on a 4:3 canvas, as large as the generator likes, and let
+`tools/normalise_parts.py` take the window this device needs out of it:
+
+```bash
+python tools/normalise_parts.py assets/kizuna --out build/parts
+```
+
+It measures one transform - a scale and a translation - from the part that has
+the eyes in it, and applies that same transform to every other part. They were
+all edited from one master, so they share a canvas, so they share the crop, and
+the composite lands registered.
+
+Two things follow, and both are worth having:
+
+- **The pixel size stops mattering.** Three deliveries here came back at
+  1448x1086 against a request for 1280x960 - the ratio exact, the size never
+  right. Now only the ratio is asked for, and that the files in one set match
+  each other, which editing from a master already guarantees.
+- **The framing can change afterwards.** Deciding the character should sit
+  lower, or that more of the torso should show, is a re-run of this tool rather
+  than a new commission.
+
 **Hand over the guide image with every request.** Generate it with:
 
 ```bash
@@ -40,7 +65,9 @@ wrong every pose inherits the error.
 > separate layer composited on top of this one, and anything drawn here shows
 > through it.
 >
-> - Canvas exactly **1280 x 960 px**, RGBA PNG. The same size as the guide.
+> - **4:3, RGBA PNG**, as large as you like. The exact pixel size does not
+>   matter; every file in this set matching the first one does, which comes
+>   free if you edit rather than redraw.
 > - Background **alpha 0** - not white, not a faint wash.
 > - The shoulders and collar sit exactly where the guide shows them. This file
 >   is the reference every other pose is edited from, so its placement is the

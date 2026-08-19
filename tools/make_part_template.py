@@ -116,6 +116,14 @@ def main() -> int:
         d.text((16, my1 + 46), "draw below this line only - the head is a layer",
                fill=BOX)
 
+    # The device's text panel covers the bottom 224 px of this canvas. Anything
+    # composed down there is never seen.
+    band = 736
+    d.rectangle((0, band, eg.CANVAS[0] - 1, eg.CANVAS[1] - 1),
+                fill=(24, 26, 32), outline=(90, 95, 110), width=3)
+    d.text((14, band + 10), "text panel - the device draws over this, "
+                            "keep the character above y=736", fill=(210, 215, 230))
+
     draws, leaves = LAYERS[a.layer]
     d.text((20, 20), f"{a.layer}/{a.angle}: draw {draws}", fill=NOTE)
     d.text((20, 44), f"{leaves}", fill=NOTE)
