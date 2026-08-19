@@ -187,9 +187,28 @@ AssetPack::OpenFile* AssetPack::acquire(const String& path) {
     if (!f) return nullptr;
 
     m5a::Header h{};
-    if (f.read(reinterpret_cast<uint8_t*>(&h), sizeof(h)) != static_cast<int>(sizeof(h)) ||
-        h.magic != m5a::kMagic || h.version != m5a::kVersion || !h.frameCount ||
-        h.frameBytes != static_cast<uint32_t>(h.width) * h.height * 2) {
+    bool ok = f.read(reinterpret_cast<uint8_t*>(&h), sizeof(h)) == static_cast<int>(sizeof(h)) &&
+              h.magic == m5a::kMagic && h.version == m5a::kVersion && h.frameCount && h.width &&
+              h.height;
+    if (ok) {
+        if (h.flags & m5a::kFlagTileDelta) {
+            // frameBytes is the largest frame payload here, not a stride, so
+            // it cannot be checked against the frame size - only bounded. The
+            // keyframe carries every tile plus the index that names them, so
+            // the bound is a whole screen *and* a full index, not just the
+            // screen.
+            const uint32_t tiles = (static_cast<uint32_t>(h.width) / m5a::kTileSide) *
+                                   (static_cast<uint32_t>(h.height) / m5a::kTileSide);
+            const uint32_t widest = sizeof(uint16_t) + tiles * sizeof(uint16_t) +
+                                    tiles * m5a::kTileBytes;
+            ok = h.frameBytes && h.frameBytes <= widest &&
+                 tiles <= m5a::kMaxTilesPerFrame &&
+                 (h.width % m5a::kTileSide) == 0 && (h.height % m5a::kTileSide) == 0;
+        } else {
+            ok = h.frameBytes == static_cast<uint32_t>(h.width) * h.height * 2;
+        }
+    }
+    if (!ok) {
         f.close();
         log_w("bad m5a header: %s", path.c_str());
         return nullptr;
