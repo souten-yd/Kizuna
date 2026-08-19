@@ -2,7 +2,8 @@
 
 #include <new>
 
-size_t TileCache::begin(size_t entryBytes, size_t budgetBytes, size_t minBytes) {
+size_t TileCache::begin(size_t entryBytes, size_t budgetBytes, size_t minBytes,
+                        size_t heapReserve) {
     end();
     if (!entryBytes) return 0;
     entryBytes_ = entryBytes;
@@ -10,12 +11,9 @@ size_t TileCache::begin(size_t entryBytes, size_t budgetBytes, size_t minBytes) 
     size_t budget = budgetBytes;
     while (budget >= minBytes && budget >= entryBytes) {
         const uint8_t slots = static_cast<uint8_t>(budget / entryBytes);
-        // The cache is allocated during boot, before Wi-Fi has been brought
-        // up, so the heap looks far roomier here than it will be a second
-        // later. Reserve enough for the whole network stack plus working
-        // room - starving Wi-Fi to cache pixels is a bad trade on a 520 KiB
-        // part with no PSRAM.
-        if (ESP.getFreeHeap() > slots * entryBytes + 110 * 1024) {
+        // Starving Wi-Fi to cache pixels is a bad trade on a 520 KiB part with
+        // no PSRAM, and the caller knows whether Wi-Fi is coming.
+        if (ESP.getFreeHeap() > slots * entryBytes + heapReserve) {
             slab_ = static_cast<uint8_t*>(malloc(slots * entryBytes));
             if (slab_) {
                 entries_ = new (std::nothrow) Entry[slots];

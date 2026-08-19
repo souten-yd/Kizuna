@@ -152,7 +152,8 @@ void DisplayTask::bootSequence() {
     renderer_.drawBootProgress("preparing cache", 80);
     const size_t entryBytes = max(pack_.layerBytes(AssetPack::Layer::Eyes),
                                   pack_.layerBytes(AssetPack::Layer::Mouth));
-    cache_.begin(entryBytes, appcfg::kTileCacheBytes, appcfg::kTileCacheMinBytes);
+    cache_.begin(entryBytes, appcfg::kTileCacheBytes, appcfg::kTileCacheMinBytes,
+                 heapReserve_);
     renderer_.begin(&pack_, &cache_);
 
     renderer_.drawBootProgress("ready", 100);
@@ -190,9 +191,10 @@ bool DisplayTask::playGesture(Gesture gesture) {
     fps = max<uint16_t>(1, min<uint16_t>(fps, appcfg::kGestureMaxFps));
     const uint32_t frameMs = 1000UL / fps;
 
-    // Full-screen gesture frames are deliberately capped: SD and LCD share one
-    // SPI bus. The eye/mouth tiles continue at 30 Hz outside this short clip;
-    // trying to stream a 320x240 RGB565 movie at 12 Hz would only create jitter.
+    // Gesture frames are capped because SD and LCD share one SPI bus. The cap
+    // is what the bus can actually carry, not a fixed number: clips now send
+    // only the tiles that moved, so the same bus buys roughly 9 fps instead of
+    // the 5 a whole 320x240 RGB565 frame allowed.
     const CompanionState startState = current_.state;
     for (uint16_t i = 0; i < frames; ++i) {
         if (pauseRequested_ || uxQueueMessagesWaiting(commandQueue_)) break;

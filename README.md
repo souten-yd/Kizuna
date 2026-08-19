@@ -70,6 +70,10 @@ Backends are swappable; the interesting part of this project is on the device.
 python server/companion_server.py --stt whisper --llm ollama \
     --ollama-model qwen3:0.6b --tts espeak --language ja
 
+# a model on the NAS: any OpenAI-compatible endpoint, e.g. QnapAssistant
+python server/companion_server.py --stt whisper --llm openai \
+    --openai-base-url http://192.168.68.57:11435/v1 --tts espeak --language ja
+
 # Claude for the language model
 export ANTHROPIC_API_KEY=...
 python server/companion_server.py --stt whisper --llm claude --tts piper \
@@ -84,6 +88,21 @@ Test the whole pipeline without hardware:
 ```bash
 python tools/fake_m5go.py --url ws://127.0.0.1:8765/m5companion
 ```
+
+## Debugging over USB
+
+The device can reach the server through the cable that flashes it, which is
+worth having because a freshly flashed board has no Wi-Fi credentials and
+provisioning them is the slowest step in the loop:
+
+```bash
+python tools/usb_link.py --url ws://127.0.0.1:8765/m5companion
+python tools/usb_link.py --url ws://... --kick 1.5   # and fake holding A
+```
+
+The server is unchanged and cannot tell the difference - see
+[docs/PROTOCOL.md](docs/PROTOCOL.md). Wi-Fi remains how the finished thing
+works; both transports can be live at once.
 
 ### Why the language model is not on the device
 

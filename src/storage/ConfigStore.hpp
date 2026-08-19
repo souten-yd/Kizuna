@@ -16,6 +16,9 @@ struct DeviceConfig {
     uint8_t brightness = 160;
     uint8_t ledBrightness = appcfg::kLedBrightness;
     bool swayEnabled = true;
+    // The pack manager web page. Useful, but it is a second TCP server on
+    // a part whose whole heap is smaller than a JPEG, so it is opt-in.
+    bool packServerEnabled = false;
 
     bool hasWifi() const { return !wifiSsid.isEmpty(); }
     bool hasServer() const { return !serverHost.isEmpty(); }

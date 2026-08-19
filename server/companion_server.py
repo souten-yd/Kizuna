@@ -31,9 +31,15 @@ log = logging.getLogger("companion")
 
 # 20 ms of 16 kHz mono PCM16, matching the firmware's chunk size exactly.
 CHUNK_BYTES = 640
-# Pacing the send slightly faster than real time keeps the device's jitter
-# buffer full without ever overflowing its 24-chunk queue.
-CHUNK_INTERVAL = 0.016
+CHUNK_SECONDS = CHUNK_BYTES / (be.SAMPLE_RATE * be.SAMPLE_WIDTH)
+# The device's jitter buffer is 24 chunks - 480 ms - and a chunk that arrives
+# when it is full is dropped, not queued. Sending faster than real time
+# therefore only works until the surplus fills it: at the 16 ms this used to
+# use, 4 ms of surplus per chunk saturates the buffer after 2.4 seconds, and
+# every chunk after that is lost. That is inaudible on a one-second beep and
+# ruins a seven-second sentence, which is what a real voice actually sends.
+# So: prime the buffer, then pace at exactly real time.
+PRIME_CHUNKS = 8
 
 EXPRESSION_TAG = re.compile(r"\[\[\s*([a-z_]+)\s*\]\]")
 KNOWN_EXPRESSIONS = {
@@ -43,6 +49,11 @@ KNOWN_EXPRESSIONS = {
 # A sentence is the unit of speech synthesis: short enough to start talking
 # quickly, long enough that prosody does not fall apart.
 SENTENCE_END = re.compile(r"(?<=[.!?。！？])\s+|\n+")
+# Emoji, pictographs, dingbats and the variation selectors that follow them.
+# Everything here is something a synthesiser cannot say out loud.
+UNSPEAKABLE = re.compile(
+    "[\U0001F000-\U0001FAFF\U00002190-\U000021FF\U00002300-\U000027BF"
+    "\U0001F1E6-\U0001F1FF\U0000FE00-\U0000FE0F\U00002B00-\U00002BFF]+")
 
 
 class Session:
@@ -73,9 +84,17 @@ class Session:
         await self.send_json({"type": "speech.begin", "format": "pcm_s16le",
                               "rate": be.SAMPLE_RATE})
         try:
-            for offset in range(0, len(pcm), CHUNK_BYTES):
+            started = time.monotonic()
+            for index, offset in enumerate(range(0, len(pcm), CHUNK_BYTES)):
                 await self.ws.send(bytes(pcm[offset:offset + CHUNK_BYTES]))
-                await asyncio.sleep(CHUNK_INTERVAL)
+                if index < PRIME_CHUNKS:
+                    continue
+                # Absolute deadlines rather than a fixed sleep: asyncio rounds
+                # a sleep up, and over a few hundred chunks that drift is
+                # another way to underrun the buffer.
+                ahead = started + (index - PRIME_CHUNKS + 1) * CHUNK_SECONDS - time.monotonic()
+                if ahead > 0:
+                    await asyncio.sleep(ahead)
         finally:
             await self.send_json({"type": "speech.end"})
 
@@ -129,7 +148,11 @@ class Session:
         seconds = len(audio) / (be.SAMPLE_RATE * be.SAMPLE_WIDTH)
         log.info("utterance: %.2f s (%d bytes)", seconds, len(audio))
         if seconds < 0.25:
+            # Send the state back too. Without it the device sits in LISTENING
+            # for ever, because nothing else ever tells it to stop - which
+            # looks like a hang and is not one.
             await self.set_expression("confused", 1200)
+            await self.send_json({"type": "state", "state": "idle"})
             return
 
         if self.app.dump_dir:
@@ -150,6 +173,13 @@ class Session:
             return
 
         log.info("heard: %s", text or "(nothing)")
+        # Speech recognition returns punctuation for a room with nobody in it.
+        # Sending that to a small model gets a confident answer to a question
+        # nobody asked - the first time it happened the reply was a sentence
+        # lifted straight out of the system prompt.
+        if text and not re.search(r"[\w\u3040-\u30ff\u4e00-\u9fff]", text):
+            log.info("nothing but punctuation; ignoring")
+            text = ""
         if not text:
             await self.set_expression("confused", 1600)
             await self.send_json({"type": "state", "state": "idle"})
@@ -202,6 +232,14 @@ class Session:
             await self.send_json({"type": "state", "state": "idle"})
 
     async def say(self, sentence: str):
+        # A small model often repeats the tag mid-reply. It is a stage
+        # direction, not something to read out loud.
+        sentence = EXPRESSION_TAG.sub("", sentence).strip()
+        # Neither is an emoji. Qwen3 ends a friendly reply with one, and a
+        # speech synthesiser either reads its name or stumbles over it.
+        sentence = UNSPEAKABLE.sub("", sentence).strip()
+        if not sentence:
+            return
         try:
             pcm = await self.app.tts.synthesize(sentence)
         except Exception:
@@ -240,20 +278,42 @@ def build_backends(args):
     if args.mock:
         args.stt, args.llm = "none", "echo"
 
+    if args.qnap:
+        base = args.qnap.rstrip("/")
+        if not base.endswith("/v1"):
+            base += "/v1"
+        args.openai_base_url = base
+        if args.stt == "whisper":
+            args.stt = "qnap"
+        if args.tts == "espeak":
+            args.tts = "qnap"
+        if args.llm == "claude":
+            args.llm = "openai"
+
     if args.stt == "whisper":
         stt = be.WhisperStt(args.whisper_model, args.language, args.whisper_compute)
+    elif args.stt == "qnap":
+        stt = be.QnapStt(args.openai_base_url)
     else:
         stt = be.NullStt()
 
+    system = be.system_prompt(args.language)
     if args.llm == "claude":
-        llm = be.ClaudeLlm(model=args.model, effort=args.effort)
+        llm = be.ClaudeLlm(model=args.model, effort=args.effort, system=system)
     elif args.llm == "ollama":
         llm = be.OllamaLlm(model=args.ollama_model, host=args.ollama_host,
-                           think=args.ollama_think)
+                           think=args.ollama_think, system=system)
+    elif args.llm == "openai":
+        llm = be.OpenAiLlm(model=args.openai_model, base_url=args.openai_base_url,
+                           api_key=args.openai_key, system=system)
     else:
         llm = be.EchoLlm()
 
-    if args.tts == "piper":
+    if args.tts == "qnap":
+        tts = be.QnapTts(args.openai_base_url, backend=args.qnap_voice,
+                         language=args.language or "ja", peak=args.speaker_peak,
+                         profile=args.qnap_profile)
+    elif args.tts == "piper":
         tts = be.PiperTts(args.piper_voice)
     elif args.tts == "espeak":
         tts = be.EspeakTts(args.espeak_voice)
@@ -279,8 +339,15 @@ async def main_async(args):
     log.info("listening on ws://%s:%d%s", args.host, args.port, args.path)
     log.info("stt=%s llm=%s tts=%s", type(stt).__name__, type(llm).__name__, type(tts).__name__)
 
+    # No permessage-deflate. The firmware's WebSocket client does not
+    # implement it, and offering it produces a handshake the server considers
+    # successful and the client quietly does not: the device then sits there
+    # sending nothing, times out after its five second read deadline, and
+    # reconnects forever. Compression buys nothing here anyway - the payload
+    # is PCM.
     async with websockets.serve(app.handle, args.host, args.port,
-                                max_size=2 ** 20, ping_interval=20):
+                                max_size=2 ** 20, ping_interval=20,
+                                compression=None):
         await stop
     log.info("shutting down")
 
@@ -294,20 +361,36 @@ def main():
     ap.add_argument("--mock", action="store_true",
                     help="no models: echoes what it heard, for testing the audio path")
 
-    ap.add_argument("--stt", choices=["whisper", "none"], default="whisper")
+    ap.add_argument("--qnap", default="", metavar="URL",
+                    help="a QnapAssistant NAS, e.g. http://192.168.68.57:11435 - "
+                         "sets speech in, the model and speech out to it at once")
+    ap.add_argument("--qnap-voice", default="piper_plus", help="TTS backend on the NAS")
+    ap.add_argument("--qnap-profile", default="m5go",
+                    help="voice profile on the NAS. 'm5go' resamples to 16 kHz "
+                         "with a proper filter and limits the peak; '' uses the "
+                         "server's default")
+    ap.add_argument("--speaker-peak", type=float, default=0.0, metavar="0..1",
+                    help="override the profile's peak limit. The M5Stack Core has "
+                         "8x of gain after the mixer, so anything near 1.0 clips")
+    ap.add_argument("--stt", choices=["whisper", "qnap", "none"], default="whisper")
     ap.add_argument("--whisper-model", default="base")
     ap.add_argument("--whisper-compute", default="int8")
     ap.add_argument("--language", default=None, help="e.g. ja, en; auto-detect when unset")
 
-    ap.add_argument("--llm", choices=["claude", "ollama", "echo"], default="claude")
+    ap.add_argument("--llm", choices=["claude", "ollama", "openai", "echo"], default="claude")
     ap.add_argument("--model", default="claude-opus-5", help="Claude model id")
     ap.add_argument("--effort", choices=["low", "medium", "high"], default="low")
     ap.add_argument("--ollama-model", default="qwen3:0.6b")
     ap.add_argument("--ollama-host", default="http://127.0.0.1:11434")
     ap.add_argument("--ollama-think", action="store_true",
                     help="let a reasoning model think first; costs seconds of latency")
+    ap.add_argument("--openai-model", default="Qwen3-0.6B",
+                    help="model id for --llm openai; llama.cpp ignores it")
+    ap.add_argument("--openai-base-url", default="http://127.0.0.1:11435/v1",
+                    help="any OpenAI-compatible endpoint, e.g. a QnapAssistant NAS")
+    ap.add_argument("--openai-key", default="", help="sent as a bearer token when set")
 
-    ap.add_argument("--tts", choices=["piper", "espeak", "tone", "none"], default="espeak",
+    ap.add_argument("--tts", choices=["piper", "espeak", "qnap", "tone", "none"], default="espeak",
                     help="tone synthesises beeps - useful for testing the audio "
                          "path on a machine with no TTS installed")
     ap.add_argument("--piper-voice", default="", help="path to a piper .onnx voice")

@@ -14,7 +14,8 @@ class TileCache {
 public:
     // Allocates up to budgetBytes, halving on failure down to minBytes.
     // Returns the number of bytes actually reserved.
-    size_t begin(size_t entryBytes, size_t budgetBytes, size_t minBytes);
+    size_t begin(size_t entryBytes, size_t budgetBytes, size_t minBytes,
+                 size_t heapReserve);
     void end();
 
     bool enabled() const { return slab_ != nullptr; }

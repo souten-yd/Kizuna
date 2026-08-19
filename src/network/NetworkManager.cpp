@@ -66,7 +66,11 @@ void NetworkManager::loop(uint32_t nowMs) {
         ws_.begin(cfg_.serverHost.c_str(), cfg_.serverPort, cfg_.serverPath.c_str());
         ws_.onEvent(wsThunk);
         ws_.setReconnectInterval(appcfg::kWsReconnectMs);
-        ws_.enableHeartbeat(appcfg::kWsPingIntervalMs, 3000, 2);
+        // No client-side heartbeat. The server pings every 20 seconds, which
+        // is what keeps the link alive and detects a dead peer; running a
+        // second heartbeat on a part with 80 KB of heap only adds a way for
+        // the connection to be torn down and rebuilt, and each rebuild costs
+        // memory that is not fully returned.
         wsStarted_ = true;
     }
     if (wsStarted_) ws_.loop();
@@ -77,6 +81,8 @@ void NetworkManager::wsThunk(WStype_t type, uint8_t* payload, size_t length) {
 }
 
 void NetworkManager::onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
+    log_i("ws event %d len=%u heap=%u", (int)type, (unsigned)length,
+          (unsigned)ESP.getFreeHeap());
     switch (type) {
         case WStype_CONNECTED:
             wsConnected_ = true;
@@ -136,8 +142,24 @@ void NetworkManager::handleText(const uint8_t* payload, size_t length) {
     }
 }
 
+void NetworkManager::setSerialLink(bool on) {
+    if (serialLink_ == on) return;
+    serialLink_ = on;
+    if (on) sendHello();
+}
+
+void NetworkManager::emitText(const char* json, size_t length) {
+    if (serialLink_) {
+        // Length prefixed, because the same port carries log lines and the
+        // host must know where a frame ends without scanning for a delimiter.
+        Serial.printf("@tx %u\n", static_cast<unsigned>(length));
+        Serial.write(reinterpret_cast<const uint8_t*>(json), length);
+    }
+    if (wsConnected_) ws_.sendTXT(json, length);
+}
+
 void NetworkManager::sendHello() {
-    if (!wsConnected_) return;
+    if (!serverConnected()) return;
     StaticJsonDocument<448> doc;
     doc["type"] = "hello";
     doc["device"] = "m5go";
@@ -150,34 +172,44 @@ void NetworkManager::sendHello() {
     doc["ip"] = ip_;
     String out;
     serializeJson(doc, out);
-    ws_.sendTXT(out);
+    const bool ok = wsConnected_ ? ws_.sendTXT(out) : true;
+    log_i("hello %u bytes -> %s", (unsigned)out.length(), ok ? "sent" : "FAILED");
+    if (serialLink_) emitText(out);
 }
 
 void NetworkManager::sendListenBegin() {
-    if (!wsConnected_) return;
-    ws_.sendTXT("{\"type\":\"listen.begin\",\"format\":\"pcm_s16le\",\"rate\":16000}");
+    if (!serverConnected()) return;
+    uplinkChunks_ = 0;
+    uplinkFailures_ = 0;
+    emitText(String("{\"type\":\"listen.begin\",\"format\":\"pcm_s16le\",\"rate\":16000}"));
 }
 
 void NetworkManager::sendListenEnd(bool cancelled) {
-    if (!wsConnected_) return;
-    ws_.sendTXT(cancelled ? "{\"type\":\"listen.end\",\"cancelled\":true}"
-                          : "{\"type\":\"listen.end\"}");
+    if (!serverConnected()) return;
+    // What actually left the device, against what the microphone produced.
+    // A short utterance at the server can mean a short press, a starved
+    // uplink or a full queue, and those need different fixes.
+    log_i("uplink: %u chunks sent, %u sends failed (%.2f s of audio)",
+          (unsigned)uplinkChunks_, (unsigned)uplinkFailures_,
+          uplinkChunks_ * appcfg::kAudioSamplesPerChunk / (float)appcfg::kAudioSampleRate);
+    emitText(String(cancelled ? "{\"type\":\"listen.end\",\"cancelled\":true}"
+                              : "{\"type\":\"listen.end\"}"));
 }
 
 void NetworkManager::sendState(CompanionState state, Expression expression) {
-    if (!wsConnected_) return;
+    if (!serverConnected()) return;
     StaticJsonDocument<192> doc;
     doc["type"] = "device.state";
     doc["state"] = stateName(state);
     doc["expression"] = expressionName(expression);
     String out;
     serializeJson(doc, out);
-    ws_.sendTXT(out);
+    emitText(out);
 }
 
 void NetworkManager::sendTelemetry(uint8_t battery, bool charging, uint32_t freeHeap,
-                                   uint32_t fpsX10) {
-    if (!wsConnected_) return;
+                                   uint32_t fpsX10, uint16_t droppedChunks) {
+    if (!serverConnected()) return;
     StaticJsonDocument<256> doc;
     doc["type"] = "device.telemetry";
     doc["battery"] = battery;
@@ -185,12 +217,26 @@ void NetworkManager::sendTelemetry(uint8_t battery, bool charging, uint32_t free
     doc["heap"] = freeHeap;
     doc["fps"] = fpsX10 / 10.0f;
     doc["rssi"] = rssi();
+    // Audio chunks the playback queue had no room for. Anything but zero
+    // during a reply means the server is sending faster than real time.
+    doc["dropped"] = droppedChunks;
     String out;
     serializeJson(doc, out);
-    ws_.sendTXT(out);
+    emitText(out);
 }
 
 bool NetworkManager::sendAudio(const int16_t* samples, size_t sampleCount) {
-    if (!wsConnected_ || !samples || !sampleCount) return false;
-    return ws_.sendBIN(reinterpret_cast<const uint8_t*>(samples), sampleCount * sizeof(int16_t));
+    if (!samples || !sampleCount) return false;
+    const size_t bytes = sampleCount * sizeof(int16_t);
+    if (serialLink_) {
+        Serial.printf("@txb %u\n", static_cast<unsigned>(bytes));
+        Serial.write(reinterpret_cast<const uint8_t*>(samples), bytes);
+    }
+    if (wsConnected_) {
+        const bool ok = ws_.sendBIN(reinterpret_cast<const uint8_t*>(samples), bytes);
+        ok ? ++uplinkChunks_ : ++uplinkFailures_;
+        return ok;
+    }
+    if (serialLink_) ++uplinkChunks_;
+    return serialLink_;
 }

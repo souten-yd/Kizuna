@@ -35,7 +35,12 @@ constexpr uint32_t kMaxTickBusMs = 26;
 
 // Full-screen gesture clips are intentionally slower than the 30 Hz tile loop:
 // a 320x240 RGB565 frame is 150 KiB and SD/LCD share the same SPI bus.
-constexpr uint16_t kGestureMaxFps = 5;
+// Tile-delta clips send about 90 KB per frame against the bus's 850 KB/s
+// rather than a whole 150 KB screen, so the ceiling moved from 5 fps to
+// roughly 9 - and to about 15 once the artwork stops moving the body
+// under a head gesture. Frames that overrun simply take longer; this is
+// the rate to aim at, not a promise.
+constexpr uint16_t kGestureMaxFps = 15;
 
 // ----------------------------------------------------------------- cache ---
 // RAM budget for decoded tiles (eyes / mouth). Kept well under what the heap
@@ -44,6 +49,14 @@ constexpr uint16_t kGestureMaxFps = 5;
 // heap cannot satisfy it; the renderer then falls back to streaming from SD.
 constexpr size_t kTileCacheBytes = 48 * 1024;
 constexpr size_t kTileCacheMinBytes = 12 * 1024;
+// Heap the tile cache must leave behind. It is allocated during boot, before
+// the network stack exists, so the heap looks far roomier there than it will
+// be a second later - measured on this board, Wi-Fi plus the WebSocket client
+// plus the pack web server cost about 56 KB. Reserving only the offline
+// figure left 39 KB free, at which point the LED driver could not allocate
+// its RMT buffer and the WebSocket dropped every five seconds.
+constexpr size_t kHeapReserveOffline = 110 * 1024;
+constexpr size_t kHeapReserveWifi = 170 * 1024;
 // Open .m5a file handles kept alive (SD is mounted with max_files = 8).
 constexpr uint8_t kOpenFileCacheSlots = 5;
 
@@ -76,6 +89,9 @@ constexpr size_t kAudioBytesPerChunk = kAudioSamplesPerChunk * sizeof(int16_t);
 constexpr uint8_t kMicQueueDepth = 8;
 constexpr uint8_t kPlaybackQueueDepth = 24;     // ~480 ms jitter buffer
 constexpr uint8_t kPlaybackPrerollChunks = 4;   // ~80 ms before first output
+// The M5GO's electret feeds the ADC at a low level; M5Unified multiplies
+// what it reads by this before handing it over.
+constexpr uint8_t kMicMagnification = 16;
 constexpr uint8_t kSpeakerVolume = 150;
 constexpr uint8_t kVisemeCount = 8;
 

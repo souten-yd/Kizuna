@@ -27,6 +27,7 @@ DeviceConfig ConfigStore::load() {
     cfg.brightness = prefs.getUChar("bright", 160);
     cfg.ledBrightness = prefs.getUChar("led", appcfg::kLedBrightness);
     cfg.swayEnabled = prefs.getBool("sway", true);
+    cfg.packServerEnabled = prefs.getBool("packsrv", false);
     return cfg;
 }
 
@@ -43,6 +44,7 @@ bool ConfigStore::save(const DeviceConfig& cfg) {
     prefs.putUChar("bright", cfg.brightness);
     prefs.putUChar("led", cfg.ledBrightness);
     prefs.putBool("sway", cfg.swayEnabled);
+    prefs.putBool("packsrv", cfg.packServerEnabled);
     return prefs.getString("ssid", "") == cfg.wifiSsid;
 }
 
@@ -92,6 +94,7 @@ bool ConfigStore::mergeFromSd(DeviceConfig& cfg) {
     if (doc.containsKey("volume")) cfg.volume = doc["volume"];
     if (doc.containsKey("brightness")) cfg.brightness = doc["brightness"];
     if (doc.containsKey("led_brightness")) cfg.ledBrightness = doc["led_brightness"];
+    if (doc.containsKey("pack_server")) cfg.packServerEnabled = doc["pack_server"];
 
     if (changed) save(cfg);
     return changed;

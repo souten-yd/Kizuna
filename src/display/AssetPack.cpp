@@ -187,9 +187,28 @@ AssetPack::OpenFile* AssetPack::acquire(const String& path) {
     if (!f) return nullptr;
 
     m5a::Header h{};
-    if (f.read(reinterpret_cast<uint8_t*>(&h), sizeof(h)) != static_cast<int>(sizeof(h)) ||
-        h.magic != m5a::kMagic || h.version != m5a::kVersion || !h.frameCount ||
-        h.frameBytes != static_cast<uint32_t>(h.width) * h.height * 2) {
+    bool ok = f.read(reinterpret_cast<uint8_t*>(&h), sizeof(h)) == static_cast<int>(sizeof(h)) &&
+              h.magic == m5a::kMagic && h.version == m5a::kVersion && h.frameCount && h.width &&
+              h.height;
+    if (ok) {
+        if (h.flags & m5a::kFlagTileDelta) {
+            // frameBytes is the largest frame payload here, not a stride, so
+            // it cannot be checked against the frame size - only bounded. The
+            // keyframe carries every tile plus the index that names them, so
+            // the bound is a whole screen *and* a full index, not just the
+            // screen.
+            const uint32_t tiles = (static_cast<uint32_t>(h.width) / m5a::kTileSide) *
+                                   (static_cast<uint32_t>(h.height) / m5a::kTileSide);
+            const uint32_t widest = sizeof(uint16_t) + tiles * sizeof(uint16_t) +
+                                    tiles * m5a::kTileBytes;
+            ok = h.frameBytes && h.frameBytes <= widest &&
+                 tiles <= m5a::kMaxTilesPerFrame &&
+                 (h.width % m5a::kTileSide) == 0 && (h.height % m5a::kTileSide) == 0;
+        } else {
+            ok = h.frameBytes == static_cast<uint32_t>(h.width) * h.height * 2;
+        }
+    }
+    if (!ok) {
         f.close();
         log_w("bad m5a header: %s", path.c_str());
         return nullptr;
@@ -250,6 +269,88 @@ uint16_t AssetPack::clipFps(const char* name) {
     if (!path) return 0;
     OpenFile* slot = acquire(*path);
     return slot ? slot->header.fps : 0;
+}
+
+namespace {
+
+// Reads frame `frame`'s payload offset out of the table that follows the
+// header. Two reads rather than one so a clip with many frames does not need
+// its whole table in RAM.
+bool frameOffset(File& file, uint16_t frame, uint32_t& start, uint32_t& end) {
+    const uint32_t at = m5a::kHeaderBytes + static_cast<uint32_t>(frame) * sizeof(uint32_t);
+    uint32_t pair[2];
+    if (!file.seek(at)) return false;
+    if (file.read(reinterpret_cast<uint8_t*>(pair), sizeof(pair)) != sizeof(pair)) return false;
+    start = pair[0];
+    end = pair[1];
+    return end > start;
+}
+
+}  // namespace
+
+bool AssetPack::clipIsTileDelta(const char* name) {
+    const String* path = namedClipPath(name);
+    if (!path) return false;
+    OpenFile* slot = acquire(*path);
+    return slot && (slot->header.flags & m5a::kFlagTileDelta);
+}
+
+bool AssetPack::readClipTileIndex(const char* name, uint16_t frame, uint16_t* indices,
+                                  uint16_t maxTiles, uint16_t& outCount, uint16_t& outTilesX) {
+    outCount = 0;
+    if (!indices) return false;
+    const String* path = namedClipPath(name);
+    if (!path) return false;
+    OpenFile* slot = acquire(*path);
+    if (!slot) return false;
+
+    const m5a::Header& h = slot->header;
+    if (!(h.flags & m5a::kFlagTileDelta) || frame >= h.frameCount) return false;
+    outTilesX = (h.width + m5a::kTileSide - 1) / m5a::kTileSide;
+
+    uint32_t start = 0, end = 0;
+    if (!frameOffset(slot->file, frame, start, end)) return false;
+    if (!slot->file.seek(start)) return false;
+
+    uint16_t count = 0;
+    if (slot->file.read(reinterpret_cast<uint8_t*>(&count), sizeof(count)) != sizeof(count)) {
+        return false;
+    }
+    if (count > maxTiles) return false;
+    const size_t want = static_cast<size_t>(count) * sizeof(uint16_t);
+    if (slot->file.read(reinterpret_cast<uint8_t*>(indices), want) != static_cast<int>(want)) {
+        return false;
+    }
+    outCount = count;
+    return true;
+}
+
+bool AssetPack::readClipTileData(const char* name, uint16_t frame, uint16_t first,
+                                 uint16_t count, uint8_t* dst) {
+    if (!dst || !count) return false;
+    const String* path = namedClipPath(name);
+    if (!path) return false;
+    OpenFile* slot = acquire(*path);
+    if (!slot) return false;
+
+    const m5a::Header& h = slot->header;
+    if (!(h.flags & m5a::kFlagTileDelta) || frame >= h.frameCount) return false;
+
+    uint32_t start = 0, end = 0;
+    if (!frameOffset(slot->file, frame, start, end)) return false;
+    if (!slot->file.seek(start)) return false;
+
+    uint16_t total = 0;
+    if (slot->file.read(reinterpret_cast<uint8_t*>(&total), sizeof(total)) != sizeof(total)) {
+        return false;
+    }
+    if (static_cast<uint32_t>(first) + count > total) return false;
+
+    const uint32_t pixels = start + sizeof(uint16_t) +
+                            static_cast<uint32_t>(total) * sizeof(uint16_t);
+    if (!slot->file.seek(pixels + static_cast<uint32_t>(first) * m5a::kTileBytes)) return false;
+    const size_t want = static_cast<size_t>(count) * m5a::kTileBytes;
+    return slot->file.read(dst, want) == static_cast<int>(want);
 }
 
 bool AssetPack::readClipBand(const char* name, uint16_t frame, uint16_t rowStart, uint16_t rows,

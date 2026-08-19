@@ -9,7 +9,8 @@
 >
 > Follow this specification exactly - it is a technical spec, not a
 > suggestion. The failure modes it prevents are invisible until the artwork is
-> on the device.
+> on the device. Section 0 lists the ones a previous attempt actually hit, with
+> the measurements; read it before you draw anything.
 >
 > **[paste the contents of docs/ASSET_BRIEF.md here]**
 >
@@ -25,3 +26,40 @@
 > Before you finish, verify against the checklist in section 7. In particular:
 > base faces must have no eyes, no brows and no mouth; part files must not be
 > cropped to their own bounding box; and nothing may have a white background.
+
+## If only the eyes are being redrawn
+
+Use [CODEX_EYES_PROMPT.md](CODEX_EYES_PROMPT.md) instead of this file - it is
+self-contained and asks for the master eye first, which is the part that
+matters. The short form:
+
+The rest of the pack can stay as it is while the eyes are replaced, because
+the eyes are where the visible defects were. Ask for `eyes/` alone, and say
+this on top of the brief:
+
+> Draw the twenty-two eye parts of section 3.2, and nothing else. Every one is
+> a full 1280x960 RGBA canvas, transparent except for the two eyes, with the
+> pupils on y = 448 and 192 px apart.
+>
+> Draw `open` first and treat it as the master. Every other part is that
+> drawing modified - the same eye shape, the same size, in the same place on
+> the canvas:
+>
+> - the four gaze parts move **only the iris and its highlight** inside an
+>   unchanged outline. Do not redraw or resize the lid, the lash or the
+>   eye opening. Gaze right was the worst defect in the previous pack.
+> - the five blink stages lower **both lids by the same amount**. A stage that
+>   closes one eye further than the other is read as a wink, and blink runs
+>   several times a minute.
+> - `wink_left` and `wink_right` are the only parts where the two eyes differ.
+>
+> Deliver them as layers of one drawing. If you render each part
+> independently, the eye will change size between frames and the device will
+> show debris along the lower lid every time the character blinks - which is
+> exactly what happened last time.
+
+Then verify before packing:
+
+```bash
+python tools/validate_assets.py assets/kizuna
+```

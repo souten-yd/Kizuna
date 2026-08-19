@@ -20,8 +20,16 @@ import numpy as np
 from PIL import Image
 
 CANVAS = (1280, 960)
-EYE_LINE_Y = 448
-INTEROCULAR = 192
+EYE_LINE_Y = 440
+# Measured from the artwork the device actually shows, not from the recipe's
+# `eye_span`. That value is what the packer normalises towards, using a
+# landmark detector whose idea of an eye centre is a bounding box rather than
+# a pupil, so the composed face ends up with its irises 237 px apart on this
+# canvas where the recipe says 192. Artwork has to match the picture.
+# `tools/eye_geometry.py` re-measures it from a built pack.
+INTEROCULAR = 237
+# The eye rectangle on the 1280x960 canvas, from the recipe's eye_rect x4.
+EYE_RECT = (384, 328, 896, 504)
 FACE_CENTER_X = 640
 
 LAYER_DIRS = ("base", "eyes", "mouths", "brows", "fx")
@@ -56,10 +64,15 @@ def check_image(path: Path, rel: str, report: Report):
 
     if image.mode != "RGBA":
         report.error(f"{rel}: mode is {image.mode}, expected RGBA")
-        return None
+        image = image.convert("RGBA")
     if image.size != CANVAS:
         report.error(f"{rel}: size is {image.size}, expected {CANVAS}")
-        return None
+        # Keep going anyway. Stopping here means a regenerated delivery has to
+        # be run past this tool once per defect; the registration checks below
+        # are the ones that cost a redraw, so they are worth reporting even
+        # when the canvas is the wrong shape. They scale to CANVAS first, so
+        # what they report is the proportion, which is what matters.
+        image = image.resize(CANVAS, Image.LANCZOS)
 
     arr = np.asarray(image)
     alpha = arr[:, :, 3]
@@ -84,6 +97,17 @@ def check_image(path: Path, rel: str, report: Report):
         if rgb.mean() > 236:
             report.warn(f"{rel}: soft edges are near-white - possible halo from "
                         "a removed background")
+
+    # A wash of barely-visible pixels over most of the canvas is what some
+    # image tools leave behind when asked to export "transparent": the
+    # background is still there at a few percent alpha. It survives every
+    # visual check - the file looks clean in a viewer - and then composites
+    # as a grey film over whatever the device draws behind the character.
+    faint = ((alpha > 4) & (alpha <= 40)).mean()
+    if faint > 0.25:
+        report.error(f"{rel}: {faint:.0%} of the canvas is a faint wash rather "
+                     f"than transparent; the background was exported at low "
+                     f"alpha instead of removed")
     return arr
 
 
@@ -110,18 +134,49 @@ def check_eye_registration(arr: np.ndarray, rel: str, report: Report):
         report.warn(f"{rel}: eyes about {span:.0f} px apart, expected "
                     f"~{INTEROCULAR}")
 
+    if "wink" not in Path(rel).stem:
+        check_eye_symmetry(alpha, rel, report)
+
+
+def check_eye_symmetry(alpha: np.ndarray, rel: str, report: Report):
+    """Both eyes should be in the same state unless the part is a wink.
+
+    A blink stage that closes one eye further than the other reads as a wink,
+    and blink fires several times a minute - so the character appears to wink
+    at the viewer constantly. Mirroring one half onto the other and comparing
+    coverage catches it without needing to know what the eye looks like.
+    """
+    left = alpha[:, :FACE_CENTER_X] > 60
+    right = np.fliplr(alpha[:, FACE_CENTER_X:]) > 60
+    n = min(left.shape[1], right.shape[1])
+    # Compare the halves inward from the centre line, where the eyes are.
+    la = int(left[:, left.shape[1] - n:].sum())
+    ra = int(right[:, right.shape[1] - n:].sum())
+    if la < 50 or ra < 50:
+        return
+    ratio = min(la, ra) / max(la, ra)
+    if ratio < 0.6:
+        report.error(f"{rel}: the two eyes differ in coverage by "
+                     f"{100 * (1 - ratio):.0f}% - one is more closed than the "
+                     f"other, which reads as a wink")
+
 
 def check_base(arr: np.ndarray, rel: str, report: Report):
     """A base face must not already have eyes drawn on it."""
     rgb = arr[:, :, :3].astype(np.int32)
     alpha = arr[:, :, 3]
     band = slice(EYE_LINE_Y - 50, EYE_LINE_Y + 50)
-    r, g, b = rgb[band, :, 0], rgb[band, :, 1], rgb[band, :, 2]
+    # Only where an eye could be. The hair falls across the cheeks and temples
+    # at the same height and is cool enough in shadow to read as an iris - a
+    # correct eyeless base failed this check on its bangs alone.
+    side = slice(EYE_RECT[0], EYE_RECT[2])
+    r, g, b = (rgb[band, side, i] for i in range(3))
     # The irises are the only cool-toned thing on this character; skin runs an
     # R-B of about +65 and the hair about +15.
-    iris = (b - r > 6) & (r + g + b > 90) & (r + g + b < 600) & (alpha[band] > 60)
+    iris = (b - r > 6) & (r + g + b > 90) & (r + g + b < 600) & (alpha[band, side] > 60)
     if iris.sum() > 400:
-        report.error(f"{rel}: eyes appear to be drawn on the base face")
+        report.error(f"{rel}: eyes appear to be drawn on the base face "
+                     f"({iris.sum()} iris-coloured pixels between the eye marks)")
 
 
 def check_metadata(root: Path, report: Report):
@@ -184,6 +239,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("root", type=Path, help="the delivered character directory")
+    ap.add_argument("--only", nargs="+", metavar="LAYER", choices=LAYER_DIRS,
+                    help="check just these layers, for a delivery that replaces "
+                         "one of them; character.json is then not required")
     args = ap.parse_args()
 
     if not args.root.is_dir():
@@ -191,8 +249,9 @@ def main() -> int:
 
     report = Report()
     counted = 0
+    layers = tuple(args.only) if args.only else LAYER_DIRS
 
-    for layer in LAYER_DIRS:
+    for layer in layers:
         directory = args.root / layer
         if not directory.is_dir():
             report.error(f"missing directory: {layer}/")
@@ -213,7 +272,8 @@ def main() -> int:
                 check_base(arr, rel, report)
 
     print(f"\nchecked {counted} image(s)")
-    check_metadata(args.root, report)
+    if not args.only:
+        check_metadata(args.root, report)
     return report.summary()
 
 

@@ -14,6 +14,62 @@ else is easy.
 
 ---
 
+## 0. What went wrong last time
+
+The first Kizuna pack was assembled from generic 4x4 contact sheets rather
+than from parts drawn to this spec. It built, it validated, it shipped to the
+card - and it was visibly wrong on the device within a minute of switching to
+it. Everything below is a real defect that was measured in that pack, not a
+hypothetical. If a delivery reproduces any of them, it is not usable, however
+good the individual drawings are.
+
+**Each part was a separate rendering of the character, not a layer of one
+drawing.** The eyes came from `eye_direction_set.png`, the blink stages from
+`eye_blink_set_a/b.png`, the face from `expression_sheet_v2.png`. Same
+character, different pass, different head size. The packer registers parts by
+searching for the translation that best lines up the area around the eyes, and
+it did its job - but no translation fixes a size difference. Measured, after
+registration:
+
+| Eye slot | Residual offset | On a 320x240 screen |
+|---|---|---|
+| `open_center` | (-1, 3) | 1.5 px |
+| `open_left` | (-8, 3) | 4.0 px |
+| `open_right` | (13, 0) | **6.5 px** |
+| `open_up` | (3, 11) | 5.5 px |
+
+The eye is about 40 px wide on screen, so gaze-right landed a sixth of an eye
+away from where the face expected it. Even `open_center` - the resting gaze,
+which should be almost exactly what the base face already shows - differed
+from the base over **21% of the eye tile**, rising to 37% on `speaking`. On
+the device this reads as debris along the lower lid that appears and
+disappears with every blink.
+
+This is the failure that section 1 exists to prevent. Parts drawn on one
+shared canvas, at one scale, in their final position, cannot have it: there is
+nothing left to register.
+
+**A blink stage closed one eye further than the other.** `almost_closed` was
+lopsided, and because blink fires several times a minute, the character
+appeared to wink at the viewer constantly. Nobody had asked for a wink. See
+section 3.2 - both eyes move together everywhere except the two wink parts,
+and `validate_assets.py` now fails a part that breaks this.
+
+**Every gesture was a full-screen sequence.** Ten clips, all 320x240, every
+frame a complete picture. The shared SPI bus caps that at 5.5 fps, so all head
+motion was a slideshow while the eyes and mouth had 30 fps of headroom going
+unused. Cropping the clips to the region that moves buys 1.4x; per-frame delta
+coding buys 1.7x; neither reaches smooth. Section 4 is the answer, and it is a
+design constraint on the artwork, not something the firmware can optimise its
+way out of.
+
+### The one-line summary
+
+Deliver **layers of a single drawing**, not a gallery of renderings of the
+same character. Everything else in this document follows from that.
+
+---
+
 ## 1. Canvas and registration
 
 | Property | Value |
@@ -60,7 +116,8 @@ detecting a grid, and the captions get cut out along with the artwork.
 
 ```
 kizuna/
-  base/          face with no eyes, no mouth, no brows - hair, skin, body
+  base/          face, skin, body and the hair *behind* the face - no eyes,
+                 no mouth, no brows, no bangs that cross the eyes
     front.png
     tilt_left.png        tilt_right.png
     turn_left_15.png     turn_right_15.png
@@ -71,6 +128,8 @@ kizuna/
   eyes/          eyes only, on the eye line
   mouths/        mouth only, on the mouth line
   brows/         brows only, on the brow line
+  hair_front/    the bangs and strands that fall in front of the face
+                 front.png, and one per base pose that moves the hair
   fx/            blush, sweat, sparkles, symbols - each in its final position
   body/          full-body poses, separate canvas rules (section 6)
   character.json the metadata file (section 5)
@@ -116,6 +175,36 @@ Expression eyes:
 (closed upward arcs), `smile_soft`, `wink_left`, `wink_right`, `sleepy_half`,
 `sleepy_closed`, `determined`, `confused`, `sad`, `sparkle`, `dizzy`
 
+**Both eyes move together in every part except `wink_left` and `wink_right`.**
+A blink stage that closes one eye further than the other is read as a wink by
+anyone looking at it, and it fires several times a minute rather than when the
+character means it. The first pack built from generic sheets had exactly that
+in its `almost_closed` stage, and it was the first thing anyone noticed.
+
+`look_left` / `look_right` / `look_up` / `look_down` keep the **outline and
+size of `open` unchanged** and move only the iris and its highlight. When the
+outline changes too, the lid and lash land in a different place than the base
+face expects, and the difference shows up as debris along the lower lid the
+moment the gaze returns to centre. Gaze right was the worst case in the first
+pack.
+
+These twenty-two parts feed twelve slots in the firmware, which is the set the
+device can actually address. The mapping is in `character.json`; a part that
+no slot names is still worth delivering, but it will not appear until a recipe
+uses it.
+
+| Firmware slot | Part |
+|---|---|
+| `open_center` | `open` |
+| `open_left` / `open_right` | `look_left` / `look_right` |
+| `open_up` / `open_down` | `look_up` / `look_down` |
+| `soft_lower` | `soft_lower` |
+| `half` | `half` |
+| `almost_closed` | `almost_closed` |
+| `closed` | `closed` |
+| `wide` | `wide` |
+| `sleepy_half` / `sleepy_closed` | `sleepy_half` / `sleepy_closed` |
+
 ### 3.3 Mouths — 20
 
 Visemes first - these drive lip sync and must form a smooth size ramp:
@@ -127,12 +216,32 @@ Expression mouths:
 `smile_closed`, `smile_open`, `grin`, `teeth_smile`, `laugh_wide`,
 `pout`, `sad`, `mmm`, `yawn`, `shout`
 
-### 3.4 Brows — 8
+### 3.4 Hair in front of the face — one per base pose
+
+This character's bangs hang over his eyes. Composited as
+`base + eyes + brows + mouth`, the eyes land on top of the bangs and the face
+reads as a mask stuck to the front of the head rather than as a face. Measured
+on the first eyeless base: **57% of the eye rectangle is hair**, so it is not a
+detail.
+
+So the hair splits in two. Whatever passes behind the eyes stays in `base/`;
+whatever crosses in front of them goes in `hair_front/`, on the same canvas, in
+the same position, and the device draws it last:
+
+```
+base  ->  eyes  ->  brows  ->  mouth  ->  hair_front  ->  fx
+```
+
+One `hair_front` file per base pose that moves the hair, named to match:
+`front.png`, `tilt_left.png`, and so on. A pose whose hair does not move can
+reuse `front.png`.
+
+### 3.5 Brows — 8
 
 `neutral`, `happy`, `sad`, `angry`, `surprised`, `focused`, `worried`,
 `relaxed`
 
-### 3.5 FX overlays — 12
+### 3.6 FX overlays — 12
 
 Each already positioned where it belongs on the face or beside the head:
 
@@ -140,7 +249,7 @@ Each already positioned where it belongs on the face or beside the head:
 `exclamation`, `anger_mark`, `sparkle`, `emphasis_lines`, `zzz`,
 `music_note`, `heart`
 
-### 3.6 Angled variants (optional, high value)
+### 3.7 Angled variants (optional, high value)
 
 For each non-frontal base face, the same eye / mouth / brow parts redrawn to
 match that head angle, in `eyes/<angle>/`, `mouths/<angle>/`, `brows/<angle>/`.
@@ -352,8 +461,14 @@ Separate canvas rules, because the head is no longer the subject:
 - [ ] Parts sit in their final position on the canvas; opening two part files
       as layers in any editor produces a correct face with no nudging.
 - [ ] Pupil centres are on y = 448 and 192 px apart in every eye file.
+- [ ] Both eyes are in the same state in every eye file except the two winks.
+- [ ] The four gaze parts have the same eye outline as `open`; only the iris
+      has moved.
 - [ ] No captions, numbers, card frames or logos anywhere in an image.
-- [ ] Base faces have no eyes, no brows and no mouth.
+- [ ] Base faces have no eyes, no brows and no mouth, and no bangs crossing
+      the eyes - those are in `hair_front/`.
+- [ ] `base/x.png` over `hair_front/x.png` reassembles the whole head with no
+      seam and no missing strand.
 - [ ] `character.json` names only files that exist, and every file is named
       by it.
 - [ ] Blink has at least five stages and the viseme ramp is monotonic.
@@ -367,6 +482,7 @@ python tools/validate_assets.py assets/kizuna
 ```
 
 It checks canvas size and mode, that backgrounds are genuinely transparent,
-that eye files sit on the eye line at the right separation, that base faces
-have no eyes drawn on them, and that `character.json` and the files on disk
-agree in both directions. Fix everything it reports as FAIL before packing.
+that eye files sit on the eye line at the right separation, that both eyes are
+in the same state unless the file is a wink, that base faces have no eyes
+drawn on them, and that `character.json` and the files on disk agree in both
+directions. Fix everything it reports as FAIL before packing.

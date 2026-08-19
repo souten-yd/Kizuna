@@ -89,12 +89,14 @@ void App::begin() {
     nextAmbientMs_ = now + random(appcfg::kAmbientGestureMinMs, appcfg::kAmbientGestureMaxMs);
 
     display_.setPackName(config_.packName.c_str());
+    display_.setHeapReserve(config_.hasWifi() ? appcfg::kHeapReserveWifi
+                                             : appcfg::kHeapReserveOffline);
     if (!display_.begin()) log_e("display task failed to start");
     if (!audio_.begin()) log_e("audio task failed to start");
     audio_.setMuted(false);
     M5.Speaker.setVolume(config_.volume);
 
-    console_.begin(&display_, &configStore_, &config_);
+    console_.begin(&display_, &configStore_, &config_, &network_, &audio_);
 
     network_.setBinarySink(binarySinkThunk, this);
     network_.begin(config_, events_);
@@ -313,7 +315,7 @@ void App::loop() {
     network_.loop(now);
 
     // The pack manager only exists once there is a network to reach it on.
-    if (network_.wifiConnected()) {
+    if (network_.wifiConnected() && config_.packServerEnabled) {
         if (!web_.running()) web_.begin(&display_, &configStore_, &config_);
         web_.loop();
         if (web_.busy()) return;  // an upload owns the card
@@ -365,7 +367,7 @@ void App::loop() {
         DisplayTask::Stats stats;
         display_.snapshot(stats);
         network_.sendTelemetry(power_.batteryPercent(), power_.charging(), ESP.getFreeHeap(),
-                               stats.fpsX10);
+                               stats.fpsX10, audio_.droppedChunks());
         if (debug_) {
             Serial.printf("[stat] fps=%u.%u sd=%uB/s budget=%uB/s drawn=%uB/s cache=%u/%u heap=%u\n",
                           stats.fpsX10 / 10, stats.fpsX10 % 10, stats.sdBytesPerSec,

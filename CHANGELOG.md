@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased
+
+### Device
+
+- The companion protocol also runs over the USB serial link, so a board with
+  no Wi-Fi credentials can reach a server through the cable that flashed it.
+  `tools/usb_link.py` bridges it to an unmodified WebSocket server.
+- `stat` and `put` no longer ask the SD library for a path that is not there,
+  which logged an error onto the same port the console replies on.
+
+### Tools
+
+- `push_sd.py` skips firmware log lines when reading a reply. One log line
+  arriving mid-dialogue used to be read as the answer to the previous command
+  and every reply after it was off by one - which is what a first sync of a
+  brand new pack, where every `stat` misses, reliably produced.
+- `push_sd.py` finds a device that a killed run left at the transfer baud
+  rate, instead of reporting it as a board with no firmware.
+- `usb_link.py` restores the baud rate on the way out, for the same reason.
+
+### Assets
+
+- The production brief now maps the twenty-two eye parts onto the twelve slots
+  the firmware addresses, requires both eyes to be in the same state outside
+  the two winks, and requires the gaze parts to keep `open`'s outline and move
+  only the iris. All three are things the first generic-sheet pack got wrong
+  and that showed on the device.
+- `validate_assets.py` fails an eye part whose two eyes differ in coverage,
+  which is what an unintended wink looks like from the outside.
+
+### Server
+
+- `--llm openai` speaks to any OpenAI-compatible `/v1/chat/completions`
+  endpoint - written for QnapAssistant on a NAS, specific to none of it.
+- `--language` now also pins the reply language, because a small local model
+  drifts back into English after a turn or two.
+- Expression tags are stripped from a sentence before it is synthesised; a
+  small model repeats them mid-reply and they were being read out loud.
+
 ## 0.2.0
 
 First version verified on hardware.
