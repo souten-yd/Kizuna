@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fast structural validation for the bundled Kizuna source sheets/recipe."""
+"""Fast structural/landmark validation for the bundled Kizuna source sheets."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from pathlib import Path
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import build_kizuna_pack as kb  # noqa: E402
 import m5a  # noqa: E402
-import sheet as sh  # noqa: E402
 
 
 def main() -> int:
@@ -27,11 +27,20 @@ def main() -> int:
         if not path.exists():
             errors.append(f"{key}: missing {path}")
             continue
-        rows = [row for row in sh.find_cells(Image.open(path)) if len(row) == 4]
-        count = sum(len(row) for row in rows)
-        cell_count[key] = count
-        if len(rows) != 4 or count != 16:
-            errors.append(f"{key}: expected 4x4 cells, got rows={[len(r) for r in rows]}")
+        image = Image.open(path).convert("RGB")
+        if image.width % 4 or image.height % 4:
+            errors.append(f"{key}: dimensions {image.size} do not divide into a 4x4 grid")
+            continue
+        cw, ch = image.width // 4, image.height // 4
+        cell_count[key] = 16
+        for row in range(4):
+            for col in range(4):
+                idx = row * 4 + col
+                cell = image.crop((col * cw, row * ch, (col + 1) * cw, (row + 1) * ch))
+                try:
+                    kb.find_anchor(cell)
+                except ValueError as exc:
+                    errors.append(f"{key}: cell {idx}: {exc}")
 
     eye_names = [entry[0] for entry in recipe["eye_slots"]]
     if eye_names != list(m5a.EYE_SLOTS):
@@ -45,9 +54,9 @@ def main() -> int:
             errors.append(f"{kind}: cell {cell} out of range for {sheet_key}")
 
     for name, sheet_key, cell in recipe["eye_slots"]:
-        check_ref(f"eye {name}", sheet_key, cell)
+        check_ref(f"eye {name}", sheet_key, int(cell))
     for name, sheet_key, cell in recipe["visemes"]:
-        check_ref(f"viseme {name}", sheet_key, cell)
+        check_ref(f"viseme {name}", sheet_key, int(cell))
     for name, spec in recipe["expressions"].items():
         check_ref(f"expression {name}", spec["cell"][0], int(spec["cell"][1]))
     for name, spec in recipe.get("gestures", {}).items():
