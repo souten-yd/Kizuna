@@ -175,6 +175,50 @@ and the hand stays at its ear because nothing needs to redraw it.
 Compare with the pose-as-whole-frame model, where the same scene is 150 KB per
 frame and therefore holds completely still.
 
+## The eyes move; the head cuts
+
+Measured on the new framing, with the head's bounding box at 138 x 126 px:
+
+| What moves | Bytes | Rate |
+|---|---|---|
+| Mouth | 2.7 KB | 301/s |
+| Eyes | 4.5 KB | 182/s |
+| The whole head | 34 KB | 24/s |
+
+Seven times the headroom for a glance as for a turn. That ratio is what
+decides how this character moves.
+
+**Gaze, blink and lip sync run continuously.** There is bandwidth for six
+times the 30 Hz the display loop offers, so nothing about them needs
+rationing.
+
+**A head turn is a cut, not an animation.** At 24 fps a 0.3 second turn is
+seven frames, and seven drawn intermediate heads per angle is the wrong thing
+to commission: it is seven more chances for the registration to drift, in a
+project that has already spent a day on exactly that. The head changes angle
+in one repaint and the eyes lead the way there - which is what animation does
+anyway, for the same reason, and it reads as natural rather than as thrift.
+
+So an angle needs **one head**, not a sequence to it:
+
+| Per angle | Files |
+|---|---|
+| `base/<angle>.png` | 1 |
+| `eyes/<angle>/` | 5 |
+| `mouths/<angle>/` | 4 |
+| `brows/<angle>/` | 3 |
+| `hair_front/<angle>.png` | 1 |
+| | **14** |
+
+Four angles is 56 files. Drawing the turn instead would be 84 more heads for
+motion the bus cannot deliver smoothly regardless.
+
+**Rigid motion is the exception, and it is free.** A nod or a tilt is the same
+drawing at a different offset, so the intermediate positions are computed, not
+drawn - one head, any number of steps. It is only a change of *angle* that
+needs a new drawing, because a turning head occludes itself and no amount of
+interpolating between two pictures invents the ear that was hidden.
+
 ## Registration
 
 Unchanged, and it is what makes the composite work without any per-part

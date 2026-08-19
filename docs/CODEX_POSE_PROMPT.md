@@ -150,6 +150,13 @@ together, so the eyes and the head they belong to are drawn in one sitting.
 Then repeat B1 and B2 for `turn_left_15`, `look_up` and `look_down`. Later,
 `tilt_left` and `tilt_right`.
 
+**One head per angle - do not draw the turn.** No sequence from front to 15
+degrees, no intermediate heads. The device changes angle in a single repaint
+and moves the eyes to lead it; the bus carries 24 head repaints a second
+against 182 eye updates, so a drawn turn would be the expensive half of the
+motion and the one nobody would see smoothly. Nods and tilts are a different
+matter - those are one drawing at an offset, and the steps are computed.
+
 ---
 
 ## Accepting a delivery
