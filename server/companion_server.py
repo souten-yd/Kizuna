@@ -172,6 +172,10 @@ class Session:
         await self.send_json({"type": "state", "state": "thinking",
                               "expression": "thinking"})
 
+        if self.app.voice is not None:
+            await self.handle_utterance_streamed(audio)
+            return
+
         try:
             text = await self.app.stt.transcribe(audio)
         except Exception:
@@ -239,6 +243,46 @@ class Session:
         finally:
             await self.send_json({"type": "state", "state": "idle"})
 
+    async def handle_utterance_streamed(self, audio: bytes):
+        """The NAS does recognition, thought and synthesis in one request.
+
+        There is no expression tag on this path - the model here is not given
+        our system prompt - so the face is driven by the state changes instead,
+        which is what it falls back to anyway when a small model forgets the
+        tag.
+        """
+        spoke = False
+        try:
+            async for kind, payload in self.app.voice.respond(audio):
+                if kind == "transcript":
+                    log.info("heard: %s (%s ms)",
+                             payload.get("transcript") or "(nothing)",
+                             payload.get("timings", {}).get("asr_wall_ms"))
+                elif kind == "text":
+                    log.info("saying: %s", payload.get("text", ""))
+                elif kind == "audio":
+                    if not spoke:
+                        spoke = True
+                        await self.set_expression("speaking", 3000)
+                    await self.speak(payload)
+                elif kind == "done":
+                    timings = payload.get("timings", {})
+                    log.info("said: %s (first audio %s ms, total %s ms)",
+                             payload.get("reply", ""),
+                             timings.get("first_audio_ready_ms"),
+                             timings.get("total_wall_ms") or timings.get("wall_ms"))
+        except asyncio.CancelledError:
+            log.info("reply interrupted by the user")
+            raise
+        except Exception:
+            log.exception("voice pipeline failed")
+            await self.set_expression("error", 2500)
+        else:
+            if not spoke:
+                await self.set_expression("confused", 1600)
+        finally:
+            await self.send_json({"type": "state", "state": "idle"})
+
     async def say(self, sentence: str):
         # A small model often repeats the tag mid-reply. It is a stage
         # direction, not something to read out loud.
@@ -257,10 +301,13 @@ class Session:
 
 
 class CompanionApp:
-    def __init__(self, stt, llm, tts, dump_dir: Path | None, history_turns: int):
+    def __init__(self, stt, llm, tts, dump_dir: Path | None, history_turns: int,
+                 voice=None):
         self.stt = stt
         self.llm = llm
         self.tts = tts
+        # When set, one streaming request replaces all three of the above.
+        self.voice = voice
         self.dump_dir = dump_dir
         self.history_turns = history_turns
 
@@ -280,6 +327,12 @@ class CompanionApp:
             if session.speaking_task:
                 session.speaking_task.cancel()
             log.info("disconnected %s", peer)
+
+
+def build_voice(args):
+    if not args.qnap or not args.qnap_stream:
+        return None
+    return be.QnapVoicePipeline(args.openai_base_url, profile=args.qnap_profile)
 
 
 def build_backends(args):
@@ -335,7 +388,8 @@ def build_backends(args):
 
 async def main_async(args):
     stt, llm, tts = build_backends(args)
-    app = CompanionApp(stt, llm, tts, args.dump_dir, args.history_turns)
+    app = CompanionApp(stt, llm, tts, args.dump_dir, args.history_turns,
+                       voice=build_voice(args))
 
     stop = asyncio.get_running_loop().create_future()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -345,7 +399,12 @@ async def main_async(args):
             pass
 
     log.info("listening on ws://%s:%d%s", args.host, args.port, args.path)
-    log.info("stt=%s llm=%s tts=%s", type(stt).__name__, type(llm).__name__, type(tts).__name__)
+    if app.voice is not None:
+        log.info("voice pipeline=%s (speech in, thought and speech out in one "
+                 "streaming request)", type(app.voice).__name__)
+    else:
+        log.info("stt=%s llm=%s tts=%s",
+                 type(stt).__name__, type(llm).__name__, type(tts).__name__)
 
     # No permessage-deflate. The firmware's WebSocket client does not
     # implement it, and offering it produces a handshake the server considers
@@ -373,6 +432,9 @@ def main():
                     help="a QnapAssistant NAS, e.g. http://192.168.68.57:11435 - "
                          "sets speech in, the model and speech out to it at once")
     ap.add_argument("--qnap-voice", default="piper_plus", help="TTS backend on the NAS")
+    ap.add_argument("--qnap-stream", action=argparse.BooleanOptionalAction, default=True,
+                    help="use the NAS's streaming voice endpoint, which starts "
+                         "speaking on the first sentence instead of the last")
     ap.add_argument("--qnap-profile", default="m5go",
                     help="voice profile on the NAS. 'm5go' resamples to 16 kHz "
                          "with a proper filter and limits the peak; '' uses the "

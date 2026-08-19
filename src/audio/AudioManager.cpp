@@ -3,6 +3,7 @@
 #include <math.h>
 
 #include <driver/adc.h>
+#include <soc/i2s_struct.h>
 #include <esp_timer.h>
 
 #include <M5Unified.h>
@@ -166,6 +167,49 @@ void AudioManager::selfTest(uint16_t chunks, uint8_t overSampling, uint16_t dmaL
                   (int)(dcBias_ >> 8));
 }
 
+void AudioManager::legacyMicClockReport(uint8_t overSampling) {
+    requestIdle();
+    for (int i = 0; i < 50 && mode_ != Mode::Idle; ++i) vTaskDelay(pdMS_TO_TICKS(10));
+    M5.Speaker.end();
+
+    auto cfg = M5.Mic.config();
+    cfg.pin_data_in = GPIO_NUM_34;
+    cfg.use_adc = true;
+    cfg.i2s_port = I2S_NUM_0;
+    cfg.sample_rate = 16000;
+    cfg.over_sampling = overSampling ? overSampling : 2;
+    M5.Mic.config(cfg);
+    if (!M5.Mic.begin()) {
+        Serial.println("err mic begin failed");
+        return;
+    }
+    // Let it settle and actually stream before reading the dividers back.
+    static int16_t scratch[64];
+    M5.Mic.record(scratch, 64, cfg.sample_rate);
+    vTaskDelay(pdMS_TO_TICKS(200));
+
+    const uint32_t n = I2S0.clkm_conf.clkm_div_num;
+    const uint32_t a = I2S0.clkm_conf.clkm_div_a;
+    const uint32_t b = I2S0.clkm_conf.clkm_div_b;
+    const uint32_t bck = I2S0.sample_rate_conf.rx_bck_div_num;
+    const uint32_t bits = I2S0.sample_rate_conf.rx_bits_mod;
+    M5.Mic.end();
+
+    // What the library asked calcClockDiv for, from its own arithmetic:
+    // bits = 1 when use_adc, div_m = 8, so the base is 80 MHz / 8 = 10 MHz,
+    // and the target is sample_rate * over_sampling.
+    const uint32_t base = 80000000u / 8u;
+    const uint32_t want = cfg.sample_rate * cfg.over_sampling;
+    const float needed = (float)base / want;
+    const float actual = (a > 0) ? (float)base / (n + (float)b / a) : (float)base / n;
+
+    Serial.printf("{\"over\":%u,\"clkm_div_num\":%u,\"clkm_div_a\":%u,\"clkm_div_b\":%u,"
+                  "\"rx_bck_div_num\":%u,\"rx_bits_mod\":%u,"
+                  "\"divider_needed\":%.1f,\"i2s_clk_hz\":%.0f,\"raw_per_bck32_hz\":%.0f}\n",
+                  (unsigned)cfg.over_sampling, (unsigned)n, (unsigned)a, (unsigned)b,
+                  (unsigned)bck, (unsigned)bits, needed, actual, actual / 32.0f);
+}
+
 void AudioManager::beginAdcMic() {
     // GPIO34 is ADC1 channel 6. 11 dB of attenuation puts the full 0-3.3 V
     // range in reach, which is what the electret's bias sits in the middle of.
@@ -229,18 +273,29 @@ void AudioManager::servicePlayback() {
         prerolled_ = true;
     }
 
-    // Keep one chunk playing and one queued behind it: that is what M5Unified
-    // needs to produce a seam-free stream.
+    // Keep one chunk playing and one queued behind it: each virtual channel
+    // holds two, so isPlaying(0) returning 2 means there is no room. The
+    // buffer handed to playRaw must stay put until the mixer has finished
+    // reading it - see kPlaybackSlots.
     while (M5.Speaker.isPlaying(0) < 2) {
         Chunk& slot = playback_[playbackIdx_];
         if (xQueueReceive(spkQueue_, &slot, 0) != pdTRUE) break;
+
+        // playRaw can still refuse, and the chunk is out of the queue by now:
+        // putting it back is the difference between a gap and a lost word.
+        if (!M5.Speaker.playRaw(slot.data, slot.samples, appcfg::kAudioSampleRate,
+                                false, 1, 0, false)) {
+            ++refused_;
+            xQueueSendToFront(spkQueue_, &slot, 0);
+            break;
+        }
         playbackIdx_ = (playbackIdx_ + 1) % kPlaybackSlots;
         lipLevel_ = levelFrom(slot.data, slot.samples);
-        M5.Speaker.playRaw(slot.data, slot.samples, appcfg::kAudioSampleRate, false, 1, 0, false);
     }
 
     if (!waiting && !M5.Speaker.isPlaying()) {
         lipLevel_ = 0;
+        if (underruns_ < UINT16_MAX) ++underruns_;
         // Underrun: re-arm the jitter buffer so a network hiccup does not turn
         // into a machine-gun stutter.
         prerolled_ = false;

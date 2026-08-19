@@ -42,11 +42,18 @@ public:
     bool muted() const { return muted_; }
     uint8_t lipLevel() const { return lipLevel_; }
     uint16_t droppedChunks() const { return dropped_; }
+    uint16_t playbackUnderruns() const { return underruns_; }
+    uint16_t playbackRefusals() const { return refused_; }
 
     // Records a burst straight from the driver and reports what it cost,
     // with the state machine, the queue and the network out of the way.
     void selfTest(uint16_t chunks, uint8_t overSampling, uint16_t dmaLen,
                   uint8_t dmaCount, uint8_t magnification);
+
+    // Brings up M5Unified's I2S ADC microphone and reports the clock divider
+    // the library ended up programming. Kept after that path was abandoned,
+    // because the numbers are the evidence for an upstream bug report.
+    void legacyMicClockReport(uint8_t overSampling);
 
 private:
     enum class Mode : uint8_t { Idle, Capture, Playback };
@@ -69,6 +76,8 @@ private:
     volatile bool muted_ = false;
     volatile uint8_t lipLevel_ = 0;
     volatile uint16_t dropped_ = 0;
+    volatile uint16_t underruns_ = 0;
+    volatile uint16_t refused_ = 0;
     uint32_t producedChunks_ = 0;
     uint32_t recordFailures_ = 0;
     uint32_t recordMicros_ = 0;
