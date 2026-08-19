@@ -192,7 +192,7 @@ void NetworkManager::sendState(CompanionState state, Expression expression) {
 }
 
 void NetworkManager::sendTelemetry(uint8_t battery, bool charging, uint32_t freeHeap,
-                                   uint32_t fpsX10) {
+                                   uint32_t fpsX10, uint16_t droppedChunks) {
     if (!serverConnected()) return;
     StaticJsonDocument<256> doc;
     doc["type"] = "device.telemetry";
@@ -201,6 +201,9 @@ void NetworkManager::sendTelemetry(uint8_t battery, bool charging, uint32_t free
     doc["heap"] = freeHeap;
     doc["fps"] = fpsX10 / 10.0f;
     doc["rssi"] = rssi();
+    // Audio chunks the playback queue had no room for. Anything but zero
+    // during a reply means the server is sending faster than real time.
+    doc["dropped"] = droppedChunks;
     String out;
     serializeJson(doc, out);
     emitText(out);

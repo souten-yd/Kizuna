@@ -94,7 +94,7 @@ void App::begin() {
     audio_.setMuted(false);
     M5.Speaker.setVolume(config_.volume);
 
-    console_.begin(&display_, &configStore_, &config_, &network_);
+    console_.begin(&display_, &configStore_, &config_, &network_, &audio_);
 
     network_.setBinarySink(binarySinkThunk, this);
     network_.begin(config_, events_);
@@ -365,7 +365,7 @@ void App::loop() {
         DisplayTask::Stats stats;
         display_.snapshot(stats);
         network_.sendTelemetry(power_.batteryPercent(), power_.charging(), ESP.getFreeHeap(),
-                               stats.fpsX10);
+                               stats.fpsX10, audio_.droppedChunks());
         if (debug_) {
             Serial.printf("[stat] fps=%u.%u sd=%uB/s budget=%uB/s drawn=%uB/s cache=%u/%u heap=%u\n",
                           stats.fpsX10 / 10, stats.fpsX10 % 10, stats.sdBytesPerSec,

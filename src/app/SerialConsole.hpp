@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 
+class AudioManager;
 class DisplayTask;
 class ConfigStore;
 class NetworkManager;
@@ -25,6 +26,9 @@ struct DeviceConfig;
 //   rm <path>                   -> ok
 //   put <path> <size> <crc32>   -> ready, then <size> bytes in blocks,
 //                                  ack per block, finally ok or err <reason>
+//   beep [hz] [ms] [vol]        -> ok, one tone straight from the mixer
+//                                  (chunked playback bypassed - a way to
+//                                  tell a bad DAC from a bad pipeline)
 //   reload                      -> ok, the display task reloads the pack
 //
 // It also carries the companion protocol itself, so a bench device with no
@@ -38,7 +42,7 @@ struct DeviceConfig;
 class SerialConsole {
 public:
     void begin(DisplayTask* display, ConfigStore* configStore, DeviceConfig* config,
-               NetworkManager* network);
+               NetworkManager* network, AudioManager* audio);
     void poll();
 
     bool busy() const { return busy_; }
@@ -56,6 +60,7 @@ private:
 
     DisplayTask* display_ = nullptr;
     NetworkManager* network_ = nullptr;
+    AudioManager* audio_ = nullptr;
     ConfigStore* configStore_ = nullptr;
     DeviceConfig* config_ = nullptr;
 

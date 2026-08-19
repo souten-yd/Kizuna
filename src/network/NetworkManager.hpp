@@ -44,7 +44,8 @@ public:
     void sendListenBegin();
     void sendListenEnd(bool cancelled = false);
     void sendState(CompanionState state, Expression expression);
-    void sendTelemetry(uint8_t battery, bool charging, uint32_t freeHeap, uint32_t fpsX10);
+    void sendTelemetry(uint8_t battery, bool charging, uint32_t freeHeap, uint32_t fpsX10,
+                       uint16_t droppedChunks);
     bool sendAudio(const int16_t* samples, size_t sampleCount);
 
 private:
