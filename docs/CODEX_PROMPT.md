@@ -29,6 +29,10 @@
 
 ## If only the eyes are being redrawn
 
+Use [CODEX_EYES_PROMPT.md](CODEX_EYES_PROMPT.md) instead of this file - it is
+self-contained and asks for the master eye first, which is the part that
+matters. The short form:
+
 The rest of the pack can stay as it is while the eyes are replaced, because
 the eyes are where the visible defects were. Ask for `eyes/` alone, and say
 this on top of the brief:
