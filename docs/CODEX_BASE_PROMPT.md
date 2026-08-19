@@ -9,9 +9,10 @@ than the drawing:
 
 1. **The body must be pixel-identical in all twelve.** Only the head is
    re-posed. This is not a stylistic preference - it is what makes head
-   motion watchable. Measured on the current pack: with the body moving too,
-   a gesture plays at 5.5 fps and looks like a slideshow; with the body
-   frozen, the same gesture plays at **14.6 fps**.
+   motion watchable. The device now sends only the 16x16 tiles that changed
+   since the previous frame, which took gestures from 5.5 fps to a measured
+   11.7 fps on the current artwork. Of what is left, **36% is the body moving
+   when it did not need to**; freezing it should reach about 18 fps.
 2. **No eyes, no brows, no mouth.** The current pack's bases are finished
    faces with eyes drawn on, which is why new eye artwork does not sit on
    them - it lands on top of the old eyes instead of replacing them.
@@ -62,9 +63,10 @@ lands where the device expects it. Regenerate it with
 > re-shade it. Only the head, the hair and the neck change.
 >
 > That constraint is the whole point of this step. The device redraws only the
-> pixels that differ between two frames, so a body that moves costs more than
-> a third of every frame and drops the gesture from 15 frames a second to
-> 5. It is the difference between a nod and a slideshow.
+> 16x16 tiles that differ from the previous frame, and a body that moves is
+> 36% of that budget - measured, on the pack this replaces. Freezing it is
+> worth about six frames a second on its own, which is the difference between
+> a nod and a slideshow.
 >
 > The eleven:
 >
