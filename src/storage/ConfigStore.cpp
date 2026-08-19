@@ -22,7 +22,7 @@ DeviceConfig ConfigStore::load() {
     cfg.serverPort = prefs.getUShort("port", appcfg::kDefaultServerPort);
     cfg.serverPath = prefs.getString("path", appcfg::kDefaultServerPath);
     cfg.deviceName = prefs.getString("name", "M5GO-Companion");
-    cfg.packName = prefs.getString("pack", "claudecode");
+    cfg.packName = prefs.getString("pack", "kizuna");
     cfg.volume = prefs.getUChar("vol", appcfg::kSpeakerVolume);
     cfg.brightness = prefs.getUChar("bright", 160);
     cfg.ledBrightness = prefs.getUChar("led", appcfg::kLedBrightness);
