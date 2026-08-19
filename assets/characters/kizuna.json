@@ -3,59 +3,27 @@
   "description": "Kizuna Companion - boyish M5Stack mascot, 33 expressions, 12 eye slots, 8 visemes and comic one-shot gestures",
   "theme": "light",
   "_geometry": "Final 320x240 screen coordinates. Keep eye/mouth tiles small enough for the shared SD/LCD SPI bus.",
-  "geometry": {
-    "eye_center": [
-      160,
-      112
-    ],
-    "eye_span": 48,
-    "eye_rect": [
-      96,
-      82,
-      128,
-      44
-    ],
-    "mouth_rect": [
-      128,
-      124,
-      64,
-      40
-    ]
-  },
-  "_sheets": "All source images are normalized 4x4 grids. Cell indices are zero-based and match the generated sheet labels minus one.",
+  "geometry": {"eye_center": [160, 112], "eye_span": 48, "eye_rect": [96, 82, 128, 44], "mouth_rect": [128, 124, 64, 40]},
+  "_sheets": "All runtime source sheets are stored as tiles in one WebP atlas. Each atlas tile is itself an exact 4x4 cell grid.",
   "sheets": {
-    "expr_a": "kizuna_expression_a.webp",
-    "expr_b": "kizuna_expression_b.webp",
-    "eyes": "kizuna_eyes.webp",
-    "mouth": "kizuna_mouth.webp",
-    "head": "kizuna_head_motion.webp",
-    "gesture": "kizuna_gestures.webp"
+    "expr_a": {"file": "kizuna_atlas.webp", "grid": [4, 2], "tile": [0, 0]},
+    "expr_b": {"file": "kizuna_atlas.webp", "grid": [4, 2], "tile": [1, 0]},
+    "eyes": {"file": "kizuna_atlas.webp", "grid": [4, 2], "tile": [2, 0]},
+    "mouth": {"file": "kizuna_atlas.webp", "grid": [4, 2], "tile": [3, 0]},
+    "head": {"file": "kizuna_atlas.webp", "grid": [4, 2], "tile": [0, 1]},
+    "gesture": {"file": "kizuna_atlas.webp", "grid": [4, 2], "tile": [1, 1]}
   },
   "_eye_slots": "Fixed firmware order: center, directions, blink stages, wide and sleepy variants.",
   "eye_slots": [
-    ["open_center", "eyes", 0],
-    ["open_left", "eyes", 1],
-    ["open_right", "eyes", 2],
-    ["open_up", "eyes", 3],
-    ["open_down", "eyes", 4],
-    ["soft_lower", "eyes", 5],
-    ["half", "eyes", 6],
-    ["almost_closed", "eyes", 7],
-    ["closed", "eyes", 8],
-    ["wide", "eyes", 9],
-    ["sleepy_half", "eyes", 10],
-    ["sleepy_closed", "eyes", 11]
+    ["open_center", "eyes", 0], ["open_left", "eyes", 1], ["open_right", "eyes", 2],
+    ["open_up", "eyes", 3], ["open_down", "eyes", 4], ["soft_lower", "eyes", 5],
+    ["half", "eyes", 6], ["almost_closed", "eyes", 7], ["closed", "eyes", 8],
+    ["wide", "eyes", 9], ["sleepy_half", "eyes", 10], ["sleepy_closed", "eyes", 11]
   ],
   "_visemes": "0..4 track loudness. 5 is rounded O; 6/7 are smile mouths selected by the director.",
   "visemes": [
-    ["rest", "mouth", 0],
-    ["tiny", "mouth", 1],
-    ["small", "mouth", 2],
-    ["medium", "mouth", 3],
-    ["wide", "mouth", 3],
-    ["rounded", "mouth", 5],
-    ["smile_closed", "mouth", 6],
-    ["smile_open", "mouth", 7]
+    ["rest", "mouth", 0], ["tiny", "mouth", 1], ["small", "mouth", 2], ["medium", "mouth", 3],
+    ["wide", "mouth", 3], ["rounded", "mouth", 5], ["smile_closed", "mouth", 6], ["smile_open", "mouth", 7]
   ],
   "_expressions": "33 runtime-selectable faces. Old firmware names remain first-class; new names are exposed over the same WebSocket expression protocol.",
   "expressions": {
