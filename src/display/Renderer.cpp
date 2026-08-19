@@ -50,6 +50,18 @@ void Renderer::end() {
     tileBufBytes_ = 0;
 }
 
+void Renderer::pushTile(int16_t x, int16_t y, const uint8_t* data) const {
+    // No startWrite/endWrite: the caller holds one transaction around a whole
+    // batch. Taking and releasing the bus per tile costs more than the tile.
+    if (swapBytes_) {
+        M5.Display.pushImage(x, y, m5a::kTileSide, m5a::kTileSide,
+                             reinterpret_cast<const m5gfx::swap565_t*>(data));
+    } else {
+        M5.Display.pushImage(x, y, m5a::kTileSide, m5a::kTileSide,
+                             reinterpret_cast<const m5gfx::rgb565_t*>(data));
+    }
+}
+
 void Renderer::pushBand(int16_t x, int16_t y, int16_t w, int16_t rows, const uint8_t* data) const {
     M5.Display.startWrite();
     if (swapBytes_) {
@@ -183,11 +195,15 @@ size_t Renderer::drawClipFrameTiles(const char* clip, uint16_t frame) {
     for (uint16_t done = 0; done < count; done += batch) {
         const uint16_t n = min<uint16_t>(batch, count - done);
         if (!pack_->readClipTileData(clip, frame, done, n, band_)) break;
+        // One transaction for the batch, and none held across the SD read
+        // above - the card and the panel are on the same bus.
+        M5.Display.startWrite();
         for (uint16_t i = 0; i < n; ++i) {
             const uint16_t tile = indices[done + i];
-            pushBand((tile % tilesX) * m5a::kTileSide, (tile / tilesX) * m5a::kTileSide,
-                     m5a::kTileSide, m5a::kTileSide, band_ + i * m5a::kTileBytes);
+            pushTile((tile % tilesX) * m5a::kTileSide, (tile / tilesX) * m5a::kTileSide,
+                     band_ + i * m5a::kTileBytes);
         }
+        M5.Display.endWrite();
         moved += static_cast<size_t>(n) * m5a::kTileBytes;
     }
     overlayDirty_ = true;
