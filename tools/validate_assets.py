@@ -20,8 +20,14 @@ import numpy as np
 from PIL import Image
 
 CANVAS = (1280, 960)
-EYE_LINE_Y = 448
-INTEROCULAR = 192
+EYE_LINE_Y = 440
+# Measured from the artwork the device actually shows, not from the recipe's
+# `eye_span`. That value is what the packer normalises towards, using a
+# landmark detector whose idea of an eye centre is a bounding box rather than
+# a pupil, so the composed face ends up with its irises 237 px apart on this
+# canvas where the recipe says 192. Artwork has to match the picture.
+# `tools/eye_geometry.py` re-measures it from a built pack.
+INTEROCULAR = 237
 FACE_CENTER_X = 640
 
 LAYER_DIRS = ("base", "eyes", "mouths", "brows", "fx")
