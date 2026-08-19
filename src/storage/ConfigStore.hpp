@@ -11,7 +11,7 @@ struct DeviceConfig {
     uint16_t serverPort = appcfg::kDefaultServerPort;
     String serverPath = appcfg::kDefaultServerPath;
     String deviceName = "M5GO-Companion";
-    String packName = "claudecode";
+    String packName = "kizuna";
     uint8_t volume = appcfg::kSpeakerVolume;
     uint8_t brightness = 160;
     uint8_t ledBrightness = appcfg::kLedBrightness;
