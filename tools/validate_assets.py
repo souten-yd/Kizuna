@@ -28,6 +28,8 @@ EYE_LINE_Y = 440
 # canvas where the recipe says 192. Artwork has to match the picture.
 # `tools/eye_geometry.py` re-measures it from a built pack.
 INTEROCULAR = 237
+# The eye rectangle on the 1280x960 canvas, from the recipe's eye_rect x4.
+EYE_RECT = (384, 328, 896, 504)
 FACE_CENTER_X = 640
 
 LAYER_DIRS = ("base", "eyes", "mouths", "brows", "fx")
@@ -164,12 +166,17 @@ def check_base(arr: np.ndarray, rel: str, report: Report):
     rgb = arr[:, :, :3].astype(np.int32)
     alpha = arr[:, :, 3]
     band = slice(EYE_LINE_Y - 50, EYE_LINE_Y + 50)
-    r, g, b = rgb[band, :, 0], rgb[band, :, 1], rgb[band, :, 2]
+    # Only where an eye could be. The hair falls across the cheeks and temples
+    # at the same height and is cool enough in shadow to read as an iris - a
+    # correct eyeless base failed this check on its bangs alone.
+    side = slice(EYE_RECT[0], EYE_RECT[2])
+    r, g, b = (rgb[band, side, i] for i in range(3))
     # The irises are the only cool-toned thing on this character; skin runs an
     # R-B of about +65 and the hair about +15.
-    iris = (b - r > 6) & (r + g + b > 90) & (r + g + b < 600) & (alpha[band] > 60)
+    iris = (b - r > 6) & (r + g + b > 90) & (r + g + b < 600) & (alpha[band, side] > 60)
     if iris.sum() > 400:
-        report.error(f"{rel}: eyes appear to be drawn on the base face")
+        report.error(f"{rel}: eyes appear to be drawn on the base face "
+                     f"({iris.sum()} iris-coloured pixels between the eye marks)")
 
 
 def check_metadata(root: Path, report: Report):
