@@ -22,6 +22,10 @@ public:
     void setDeviceStatus(uint8_t batteryPercent, bool charging, bool wifi, bool server, bool muted);
     void setDebug(bool on) { frame_.showDebug = on; }
 
+    // Request a one-shot full-screen animation from the active character pack.
+    // A monotonically changing token lets the same gesture be requested twice.
+    void triggerGesture(Gesture gesture);
+
     // Nudges the character: forces a look-at-you saccade and a quick blink,
     // used when the user presses a button or picks the device up.
     void poke(uint32_t nowMs);
@@ -41,6 +45,8 @@ private:
     FaceFrame frame_{};
     Expression expression_ = Expression::Neutral;
     CompanionState state_ = CompanionState::Boot;
+    Gesture gesture_ = Gesture::None;
+    uint16_t gestureToken_ = 0;
 
     // blink
     uint32_t nextBlinkMs_ = 0;
