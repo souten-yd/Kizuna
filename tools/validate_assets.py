@@ -210,6 +210,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("root", type=Path, help="the delivered character directory")
+    ap.add_argument("--only", nargs="+", metavar="LAYER", choices=LAYER_DIRS,
+                    help="check just these layers, for a delivery that replaces "
+                         "one of them; character.json is then not required")
     args = ap.parse_args()
 
     if not args.root.is_dir():
@@ -217,8 +220,9 @@ def main() -> int:
 
     report = Report()
     counted = 0
+    layers = tuple(args.only) if args.only else LAYER_DIRS
 
-    for layer in LAYER_DIRS:
+    for layer in layers:
         directory = args.root / layer
         if not directory.is_dir():
             report.error(f"missing directory: {layer}/")
@@ -239,7 +243,8 @@ def main() -> int:
                 check_base(arr, rel, report)
 
     print(f"\nchecked {counted} image(s)")
-    check_metadata(args.root, report)
+    if not args.only:
+        check_metadata(args.root, report)
     return report.summary()
 
 
