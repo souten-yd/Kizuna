@@ -22,6 +22,66 @@ full 320x240 RGB565 frame is 150 KB. Everything below follows from that.
 changes on an event can be the whole screen.** That single rule decides the
 layer stack.
 
+## Variants as edits, not as layers
+
+There is a better way to get a feature to animate than compositing a part onto
+a face, and it removes the problem this project has spent the most time on.
+
+**One full picture per angle, plus full pictures identical to it except for the
+eyes.** The packer works out what differs and stores only that rectangle; the
+device draws the angle once and then pushes the rectangle whenever the eye
+state changes.
+
+Nothing is registered, because nothing has to be. The difference *is* where the
+feature is, by construction. There is no anchor to measure, no canvas to agree
+on, no interocular distance to get wrong - and those three between them cost a
+day.
+
+Measured on a real angle from the existing sheets, with the eye area edited:
+
+| Variant | Rectangle found | On screen | Bytes | Rate |
+|---|---|---|---|---|
+| `closed` | 408 x 128 | 102 x 32 | 6.5 KB | 129/s |
+| `half` | 400 x 72 | 100 x 18 | 3.6 KB | 235/s |
+
+Tighter than the fixed 128x44 eye tile the pack uses today, which is 11 KB,
+because it is exactly what moved rather than a box drawn around where the eyes
+were expected to be.
+
+`tools/diff_variants.py` does this, and it doubles as the acceptance test for
+the delivery. A variant that was genuinely *edited* produces a small, densely
+filled rectangle. One that was redrawn from scratch produces a rectangle
+spanning the canvas, and the tool says so:
+
+```
+closed.png    48,48 1080x912   123120   60%  <- spans the canvas; the whole picture was redrawn
+```
+
+That is the failure this project keeps hitting, finally visible to a machine
+rather than to an argument.
+
+### What to ask for
+
+For each angle: the picture, then the same picture with the eyes changed.
+
+> Here is the picture for this head angle. Give me the same picture again with
+> the eyes closed. Change nothing else - not the hair, not the shading, not the
+> background. Everything except the eyes must be identical, pixel for pixel.
+
+Five of those per angle - `open`, `half`, `closed`, `look_left`, `look_right` -
+and four more for the mouth. The instruction is the simplest one in this whole
+document, and it is the one that cannot be got wrong in a way we would not
+notice.
+
+### And the angles are already drawn
+
+`head_pose8_set.png` holds sixteen usable heads: front, turned left and right
+at two depths each, looking up, chin down. Rendered at 320x240 they are clean,
+because they were never composited - a whole cell has no seam to get wrong.
+
+So the angles cost nothing. What has to be commissioned is the *variants*, and
+only for the angles that need to animate.
+
 ## The layer stack
 
 ```
