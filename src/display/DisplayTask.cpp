@@ -193,8 +193,24 @@ bool DisplayTask::playGesture(Gesture gesture) {
     // Full-screen gesture frames are deliberately capped: SD and LCD share one
     // SPI bus. The eye/mouth tiles continue at 30 Hz outside this short clip;
     // trying to stream a 320x240 RGB565 movie at 12 Hz would only create jitter.
+    const CompanionState startState = current_.state;
     for (uint16_t i = 0; i < frames; ++i) {
-        if (pauseRequested_) break;
+        if (pauseRequested_ || uxQueueMessagesWaiting(commandQueue_)) break;
+
+        // Do not let a comic idle clip hide a real interaction. Frames arrive
+        // through a one-deep mailbox, so sampling it here gives PTT/speech and
+        // wake/sleep transitions a bounded interruption latency (one gesture
+        // frame, at most 200 ms with the 5 fps cap).
+        FaceFrame incoming;
+        if (xQueueReceive(frameQueue_, &incoming, 0) == pdTRUE) {
+            current_ = incoming;
+            if (current_.state != startState) break;
+            if (current_.gestureToken != drawnGestureToken_) {
+                drawnGestureToken_ = current_.gestureToken;
+                break;
+            }
+        }
+
         const uint32_t t0 = millis();
         bytesWindow_ += renderer_.drawClipFrame(name, i);
         const uint32_t spent = millis() - t0;
