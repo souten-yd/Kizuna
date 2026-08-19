@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fast structural/landmark validation for the bundled Kizuna source sheets."""
+"""Fast structural validation for the bundled Kizuna source sheets/recipe."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from pathlib import Path
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import build_kizuna_pack as kb  # noqa: E402
 import m5a  # noqa: E402
+import sheet as sh  # noqa: E402
 
 
 def main() -> int:
@@ -22,43 +22,23 @@ def main() -> int:
 
     errors: list[str] = []
     cell_count: dict[str, int] = {}
-    for key, spec in recipe["sheets"].items():
-        if isinstance(spec, str):
-            filename, atlas_grid, atlas_tile = spec, None, None
-        else:
-            filename = spec["file"]
-            atlas_grid = tuple(spec.get("grid", ()))
-            atlas_tile = tuple(spec.get("tile", ()))
+    for key, filename in recipe["sheets"].items():
         path = source_dir / filename
         if not path.exists():
             errors.append(f"{key}: missing {path}")
             continue
-        image = Image.open(path).convert("RGB")
-        if atlas_grid and atlas_tile:
-            gx, gy = atlas_grid
-            tx, ty = atlas_tile
-            if image.width % gx or image.height % gy or not (0 <= tx < gx and 0 <= ty < gy):
-                errors.append(f"{key}: invalid atlas geometry")
-                continue
-            aw, ah = image.width // gx, image.height // gy
-            image = image.crop((tx * aw, ty * ah, (tx + 1) * aw, (ty + 1) * ah))
-        if image.width % 4 or image.height % 4:
-            errors.append(f"{key}: dimensions {image.size} do not divide into a 4x4 grid")
-            continue
-        cw, ch = image.width // 4, image.height // 4
-        cell_count[key] = 16
-        for row in range(4):
-            for col in range(4):
-                idx = row * 4 + col
-                cell = image.crop((col * cw, row * ch, (col + 1) * cw, (row + 1) * ch))
-                try:
-                    kb.find_anchor(cell)
-                except ValueError as exc:
-                    errors.append(f"{key}: cell {idx}: {exc}")
+        rows = [row for row in sh.find_cells(Image.open(path)) if len(row) == 4]
+        count = sum(len(row) for row in rows)
+        cell_count[key] = count
+        if len(rows) != 4 or count != 16:
+            errors.append(f"{key}: expected 4x4 cells, got rows={[len(r) for r in rows]}")
 
     eye_names = [entry[0] for entry in recipe["eye_slots"]]
     if eye_names != list(m5a.EYE_SLOTS):
         errors.append(f"eye slot order mismatch: {eye_names}")
+
+    if len(recipe.get("visemes", [])) != 8:
+        errors.append(f"expected 8 visemes, got {len(recipe.get('visemes', []))}")
 
     def check_ref(kind: str, sheet_key: str, cell: int) -> None:
         if sheet_key not in recipe["sheets"]:
@@ -76,8 +56,12 @@ def main() -> int:
     for name, spec in recipe.get("gestures", {}).items():
         for cell in spec["frames"]:
             check_ref(f"gesture {name}", spec["sheet"], int(cell))
-        if not 1 <= int(spec.get("fps", 0)) <= 5:
+        fps = int(spec.get("fps", 0))
+        if not 1 <= fps <= 5:
             errors.append(f"gesture {name}: fps must be 1..5 for full-screen playback")
+
+    if len(recipe.get("expressions", {})) != 33:
+        errors.append(f"expected 33 expression intents, got {len(recipe.get('expressions', {}))}")
 
     if errors:
         for error in errors:
