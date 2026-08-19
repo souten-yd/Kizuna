@@ -77,6 +77,7 @@ private:
     void handleCommands();
     void renderTick(uint32_t nowMs);
     void renderProcedural(uint32_t nowMs);
+    bool playGesture(Gesture gesture);
     uint8_t eyeSlotFor(const FaceFrame& f) const;
 
     SdCard sd_;
@@ -98,11 +99,12 @@ private:
     bool debug_ = false;
     volatile bool pauseRequested_ = false;
     volatile bool paused_ = false;
-    char packName_[24] = "claudecode";
+    char packName_[24] = "kizuna";
 
     uint8_t drawnSway_ = 0xFF;
     uint8_t drawnEyeSlot_ = 0xFF;
     uint8_t drawnViseme_ = 0xFF;
+    uint16_t drawnGestureToken_ = 0;
     Expression drawnExpression_ = Expression::Count;
 
     uint32_t lastOverlayMs_ = 0;
