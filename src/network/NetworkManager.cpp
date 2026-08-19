@@ -179,11 +179,19 @@ void NetworkManager::sendHello() {
 
 void NetworkManager::sendListenBegin() {
     if (!serverConnected()) return;
+    uplinkChunks_ = 0;
+    uplinkFailures_ = 0;
     emitText(String("{\"type\":\"listen.begin\",\"format\":\"pcm_s16le\",\"rate\":16000}"));
 }
 
 void NetworkManager::sendListenEnd(bool cancelled) {
     if (!serverConnected()) return;
+    // What actually left the device, against what the microphone produced.
+    // A short utterance at the server can mean a short press, a starved
+    // uplink or a full queue, and those need different fixes.
+    log_i("uplink: %u chunks sent, %u sends failed (%.2f s of audio)",
+          (unsigned)uplinkChunks_, (unsigned)uplinkFailures_,
+          uplinkChunks_ * appcfg::kAudioSamplesPerChunk / (float)appcfg::kAudioSampleRate);
     emitText(String(cancelled ? "{\"type\":\"listen.end\",\"cancelled\":true}"
                               : "{\"type\":\"listen.end\"}"));
 }
@@ -225,7 +233,10 @@ bool NetworkManager::sendAudio(const int16_t* samples, size_t sampleCount) {
         Serial.write(reinterpret_cast<const uint8_t*>(samples), bytes);
     }
     if (wsConnected_) {
-        return ws_.sendBIN(reinterpret_cast<const uint8_t*>(samples), bytes);
+        const bool ok = ws_.sendBIN(reinterpret_cast<const uint8_t*>(samples), bytes);
+        ok ? ++uplinkChunks_ : ++uplinkFailures_;
+        return ok;
     }
+    if (serialLink_) ++uplinkChunks_;
     return serialLink_;
 }

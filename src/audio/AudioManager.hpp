@@ -41,6 +41,11 @@ public:
     uint8_t lipLevel() const { return lipLevel_; }
     uint16_t droppedChunks() const { return dropped_; }
 
+    // Records a burst straight from the driver and reports what it cost,
+    // with the state machine, the queue and the network out of the way.
+    void selfTest(uint16_t chunks, uint8_t overSampling, uint16_t dmaLen,
+                  uint8_t dmaCount, uint8_t magnification);
+
 private:
     enum class Mode : uint8_t { Idle, Capture, Playback };
 
@@ -48,6 +53,7 @@ private:
     void run();
     void applyMode(Mode target);
     void serviceCapture();
+    void configureMic();
     void servicePlayback();
     static uint8_t levelFrom(const int16_t* samples, size_t count);
 
@@ -60,6 +66,10 @@ private:
     volatile bool muted_ = false;
     volatile uint8_t lipLevel_ = 0;
     volatile uint16_t dropped_ = 0;
+    uint32_t producedChunks_ = 0;
+    uint32_t recordFailures_ = 0;
+    uint32_t recordMicros_ = 0;
+    bool micDisabledLogged_ = false;
     bool prerolled_ = false;
 
     Chunk capture_[2];

@@ -47,6 +47,8 @@ public:
     void sendTelemetry(uint8_t battery, bool charging, uint32_t freeHeap, uint32_t fpsX10,
                        uint16_t droppedChunks);
     bool sendAudio(const int16_t* samples, size_t sampleCount);
+    uint32_t uplinkChunks() const { return uplinkChunks_; }
+    uint32_t uplinkFailures() const { return uplinkFailures_; }
 
 private:
     static void wsThunk(WStype_t type, uint8_t* payload, size_t length);
@@ -68,6 +70,8 @@ private:
     bool wsStarted_ = false;
     bool wsConnected_ = false;
     bool serialLink_ = false;
+    uint32_t uplinkChunks_ = 0;
+    uint32_t uplinkFailures_ = 0;
     bool wifiWasUp_ = false;
     String ip_;
     uint32_t lastWifiAttemptMs_ = 0;

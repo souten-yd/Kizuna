@@ -26,6 +26,8 @@ struct DeviceConfig;
 //   rm <path>                   -> ok
 //   put <path> <size> <crc32>   -> ready, then <size> bytes in blocks,
 //                                  ack per block, finally ok or err <reason>
+//   mictest [chunks]            -> records straight from the driver and
+//                                  reports the rate it actually achieved
 //   wifi                        -> stored SSID, password *length*, server
 //   beep [hz] [ms] [vol]        -> ok, one tone straight from the mixer
 //                                  (chunked playback bypassed - a way to

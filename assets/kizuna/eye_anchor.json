@@ -1,0 +1,15 @@
+{
+  "_comment": [
+    "Pupil centres on the 1280x960 part canvas, for the base face in base/.",
+    "Read off a 10x magnification of the pack's own eye tile with a screen",
+    "coordinate grid (tools/make_eye_template.py draws the same marks).",
+    "Detecting them automatically does not work well enough to trust: the",
+    "iris is a gradient, dark at the top and pale blue at the bottom, so a",
+    "brightness centroid lands on the lower lid and a colour centroid lands",
+    "on the pale half. Both put the eyes about 20 px low. A number that a",
+    "person can check against the template picture beats a clever estimator."
+  ],
+  "canvas": [1280, 960],
+  "left_pupil": [496, 435],
+  "right_pupil": [709, 419]
+}

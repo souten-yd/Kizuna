@@ -116,7 +116,8 @@ detecting a grid, and the captions get cut out along with the artwork.
 
 ```
 kizuna/
-  base/          face with no eyes, no mouth, no brows - hair, skin, body
+  base/          face, skin, body and the hair *behind* the face - no eyes,
+                 no mouth, no brows, no bangs that cross the eyes
     front.png
     tilt_left.png        tilt_right.png
     turn_left_15.png     turn_right_15.png
@@ -127,6 +128,8 @@ kizuna/
   eyes/          eyes only, on the eye line
   mouths/        mouth only, on the mouth line
   brows/         brows only, on the brow line
+  hair_front/    the bangs and strands that fall in front of the face
+                 front.png, and one per base pose that moves the hair
   fx/            blush, sweat, sparkles, symbols - each in its final position
   body/          full-body poses, separate canvas rules (section 6)
   character.json the metadata file (section 5)
@@ -213,12 +216,32 @@ Expression mouths:
 `smile_closed`, `smile_open`, `grin`, `teeth_smile`, `laugh_wide`,
 `pout`, `sad`, `mmm`, `yawn`, `shout`
 
-### 3.4 Brows — 8
+### 3.4 Hair in front of the face — one per base pose
+
+This character's bangs hang over his eyes. Composited as
+`base + eyes + brows + mouth`, the eyes land on top of the bangs and the face
+reads as a mask stuck to the front of the head rather than as a face. Measured
+on the first eyeless base: **57% of the eye rectangle is hair**, so it is not a
+detail.
+
+So the hair splits in two. Whatever passes behind the eyes stays in `base/`;
+whatever crosses in front of them goes in `hair_front/`, on the same canvas, in
+the same position, and the device draws it last:
+
+```
+base  ->  eyes  ->  brows  ->  mouth  ->  hair_front  ->  fx
+```
+
+One `hair_front` file per base pose that moves the hair, named to match:
+`front.png`, `tilt_left.png`, and so on. A pose whose hair does not move can
+reuse `front.png`.
+
+### 3.5 Brows — 8
 
 `neutral`, `happy`, `sad`, `angry`, `surprised`, `focused`, `worried`,
 `relaxed`
 
-### 3.5 FX overlays — 12
+### 3.6 FX overlays — 12
 
 Each already positioned where it belongs on the face or beside the head:
 
@@ -226,7 +249,7 @@ Each already positioned where it belongs on the face or beside the head:
 `exclamation`, `anger_mark`, `sparkle`, `emphasis_lines`, `zzz`,
 `music_note`, `heart`
 
-### 3.6 Angled variants (optional, high value)
+### 3.7 Angled variants (optional, high value)
 
 For each non-frontal base face, the same eye / mouth / brow parts redrawn to
 match that head angle, in `eyes/<angle>/`, `mouths/<angle>/`, `brows/<angle>/`.
@@ -442,7 +465,10 @@ Separate canvas rules, because the head is no longer the subject:
 - [ ] The four gaze parts have the same eye outline as `open`; only the iris
       has moved.
 - [ ] No captions, numbers, card frames or logos anywhere in an image.
-- [ ] Base faces have no eyes, no brows and no mouth.
+- [ ] Base faces have no eyes, no brows and no mouth, and no bangs crossing
+      the eyes - those are in `hair_front/`.
+- [ ] `base/x.png` over `hair_front/x.png` reassembles the whole head with no
+      seam and no missing strand.
 - [ ] `character.json` names only files that exist, and every file is named
       by it.
 - [ ] Blink has at least five stages and the viseme ramp is monotonic.

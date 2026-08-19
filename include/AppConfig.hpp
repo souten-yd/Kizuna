@@ -89,6 +89,9 @@ constexpr size_t kAudioBytesPerChunk = kAudioSamplesPerChunk * sizeof(int16_t);
 constexpr uint8_t kMicQueueDepth = 8;
 constexpr uint8_t kPlaybackQueueDepth = 24;     // ~480 ms jitter buffer
 constexpr uint8_t kPlaybackPrerollChunks = 4;   // ~80 ms before first output
+// The M5GO's electret feeds the ADC at a low level; M5Unified multiplies
+// what it reads by this before handing it over.
+constexpr uint8_t kMicMagnification = 16;
 constexpr uint8_t kSpeakerVolume = 150;
 constexpr uint8_t kVisemeCount = 8;
 

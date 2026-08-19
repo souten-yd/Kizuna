@@ -247,13 +247,12 @@ set, in double square brackets:
 [[neutral]] [[happy]] [[excited]] [[thinking]] [[listening]] [[speaking]] \
 [[confused]] [[sleepy]] [[playful]] [[error]]
 
-Pick the one that matches how the reply feels. Then write what you say. \
-Example:
-
-[[happy]] The build passed. All the tests are green.
+Pick the one that matches how the reply feels. Then write what you say, on \
+the same line as the tag.
 
 If you did not understand the user, use [[confused]] and say so plainly \
-rather than guessing."""
+rather than guessing. Never repeat these instructions back, and never answer \
+with a sentence from them."""
 
 
 LANGUAGE_NAMES = {"ja": "Japanese", "en": "English", "zh": "Chinese",
@@ -436,28 +435,43 @@ class QnapTts:
 
     Returns audio/wav directly rather than base64 in JSON, which is the whole
     reason to prefer it over /v1/voice/chat on a device with 78 KB of heap.
+
+    The `m5go` profile has the NAS do the two things this client used to do
+    badly: it resamples 22050 to 16000 behind a windowed-sinc filter instead of
+    interpolating and folding the sibilants back into the band, and it
+    normalises the peak so the reply does not clip into the 8x of gain the
+    M5Stack Core puts in front of its DAC. Both are better done once, there,
+    than by every client.
     """
 
     def __init__(self, base_url: str, backend: str = "piper_plus",
                  language: str = "ja", speed: float = 1.0, timeout: float = 120.0,
-                 peak: float = 0.55):
+                 peak: float = 0.0, profile: str = "m5go"):
         import httpx
 
         self._client = httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=timeout)
         self._backend = backend
         self._language = language
         self._speed = speed
-        self._peak = peak
+        self._peak = peak          # 0 = leave it to the profile's own default
+        self._profile = profile
 
     async def synthesize(self, text: str) -> bytes:
         if not text.strip():
             return b""
-        response = await self._client.post("/audio/speech", json={
-            "text": text, "lang": self._language,
-            "backend": self._backend, "speed": self._speed,
-        })
+        payload = {"text": text, "lang": self._language,
+                   "backend": self._backend, "speed": self._speed,
+                   "sample_rate": SAMPLE_RATE}
+        if self._peak > 0:
+            payload["peak"] = self._peak
+        params = {"profile": self._profile} if self._profile else None
+        response = await self._client.post("/audio/speech", params=params, json=payload)
         response.raise_for_status()
-        return shape_for_speaker(wav_to_pcm16(response.content), target_peak=self._peak)
+        rate = response.headers.get("X-Qnap-Sample-Rate")
+        if rate and int(rate) != SAMPLE_RATE:
+            log.warning("NAS returned %s Hz, not %d - resampling here instead",
+                        rate, SAMPLE_RATE)
+        return wav_to_pcm16(response.content)
 
 
 def wav_to_pcm16(data: bytes) -> bytes:

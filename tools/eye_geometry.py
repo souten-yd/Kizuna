@@ -60,10 +60,23 @@ def iris_centres(image: Image.Image, alpha: np.ndarray | None = None):
 
 
 def target_pupils(pack: Path, expression: str = "neutral"):
-    """Pupil centres on the 1280x960 canvas, from the pack the device runs."""
+    """Pupil centres on the 1280x960 canvas.
+
+    Prefers `assets/kizuna/eye_anchor.json`, which holds the positions a person
+    read off a magnified tile. `iris_centres` is the fallback for a pack that
+    has no anchor file yet, and it is only approximately right - the iris runs
+    from dark at the top to pale blue at the bottom, so any centroid of it sits
+    below the pupil. It put the eyes about 20 px low, which is visible.
+    """
     import json
 
     root = Path(__file__).resolve().parents[1]
+    anchor = root / "assets/kizuna/eye_anchor.json"
+    if anchor.exists():
+        a = json.loads(anchor.read_text())
+        if tuple(a["canvas"]) == CANVAS:
+            return tuple(a["left_pupil"]), tuple(a["right_pupil"])
+
     geom = json.loads((root / "assets/characters/kizuna.json").read_text())["geometry"]
     ex, ey = geom["eye_rect"][0], geom["eye_rect"][1]
     tile = first_frame(pack / "eyes" / f"{expression}.m5a", 0)

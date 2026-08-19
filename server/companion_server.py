@@ -148,7 +148,11 @@ class Session:
         seconds = len(audio) / (be.SAMPLE_RATE * be.SAMPLE_WIDTH)
         log.info("utterance: %.2f s (%d bytes)", seconds, len(audio))
         if seconds < 0.25:
+            # Send the state back too. Without it the device sits in LISTENING
+            # for ever, because nothing else ever tells it to stop - which
+            # looks like a hang and is not one.
             await self.set_expression("confused", 1200)
+            await self.send_json({"type": "state", "state": "idle"})
             return
 
         if self.app.dump_dir:
@@ -169,6 +173,13 @@ class Session:
             return
 
         log.info("heard: %s", text or "(nothing)")
+        # Speech recognition returns punctuation for a room with nobody in it.
+        # Sending that to a small model gets a confident answer to a question
+        # nobody asked - the first time it happened the reply was a sentence
+        # lifted straight out of the system prompt.
+        if text and not re.search(r"[\w\u3040-\u30ff\u4e00-\u9fff]", text):
+            log.info("nothing but punctuation; ignoring")
+            text = ""
         if not text:
             await self.set_expression("confused", 1600)
             await self.send_json({"type": "state", "state": "idle"})
@@ -300,7 +311,8 @@ def build_backends(args):
 
     if args.tts == "qnap":
         tts = be.QnapTts(args.openai_base_url, backend=args.qnap_voice,
-                         language=args.language or "ja", peak=args.speaker_peak)
+                         language=args.language or "ja", peak=args.speaker_peak,
+                         profile=args.qnap_profile)
     elif args.tts == "piper":
         tts = be.PiperTts(args.piper_voice)
     elif args.tts == "espeak":
@@ -353,9 +365,13 @@ def main():
                     help="a QnapAssistant NAS, e.g. http://192.168.68.57:11435 - "
                          "sets speech in, the model and speech out to it at once")
     ap.add_argument("--qnap-voice", default="piper_plus", help="TTS backend on the NAS")
-    ap.add_argument("--speaker-peak", type=float, default=0.55, metavar="0..1",
-                    help="how hard to drive the speaker. The M5Stack Core has 8x of "
-                         "gain after the mixer, so anything near 1.0 clips and warbles")
+    ap.add_argument("--qnap-profile", default="m5go",
+                    help="voice profile on the NAS. 'm5go' resamples to 16 kHz "
+                         "with a proper filter and limits the peak; '' uses the "
+                         "server's default")
+    ap.add_argument("--speaker-peak", type=float, default=0.0, metavar="0..1",
+                    help="override the profile's peak limit. The M5Stack Core has "
+                         "8x of gain after the mixer, so anything near 1.0 clips")
     ap.add_argument("--stt", choices=["whisper", "qnap", "none"], default="whisper")
     ap.add_argument("--whisper-model", default="base")
     ap.add_argument("--whisper-compute", default="int8")
