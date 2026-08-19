@@ -53,6 +53,9 @@ public:
 
     // Must be called before begin(); the boot sequence reads it.
     void setPackName(const char* name);
+    // Call before begin(): how much heap the tile cache must leave for what
+    // starts later. Wi-Fi is not up yet when the cache is sized.
+    void setHeapReserve(size_t bytes) { heapReserve_ = bytes; }
     bool begin();
     void submit(const FaceFrame& frame);
     void post(const CommandMsg& msg);
@@ -71,6 +74,7 @@ public:
     const char* sdHint() const { return sd_.hint(); }
 
 private:
+    size_t heapReserve_ = appcfg::kHeapReserveOffline;
     static void taskThunk(void* ctx);
     void run();
     void bootSequence();

@@ -49,6 +49,14 @@ constexpr uint16_t kGestureMaxFps = 15;
 // heap cannot satisfy it; the renderer then falls back to streaming from SD.
 constexpr size_t kTileCacheBytes = 48 * 1024;
 constexpr size_t kTileCacheMinBytes = 12 * 1024;
+// Heap the tile cache must leave behind. It is allocated during boot, before
+// the network stack exists, so the heap looks far roomier there than it will
+// be a second later - measured on this board, Wi-Fi plus the WebSocket client
+// plus the pack web server cost about 56 KB. Reserving only the offline
+// figure left 39 KB free, at which point the LED driver could not allocate
+// its RMT buffer and the WebSocket dropped every five seconds.
+constexpr size_t kHeapReserveOffline = 110 * 1024;
+constexpr size_t kHeapReserveWifi = 170 * 1024;
 // Open .m5a file handles kept alive (SD is mounted with max_files = 8).
 constexpr uint8_t kOpenFileCacheSlots = 5;
 

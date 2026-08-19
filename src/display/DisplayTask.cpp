@@ -152,7 +152,8 @@ void DisplayTask::bootSequence() {
     renderer_.drawBootProgress("preparing cache", 80);
     const size_t entryBytes = max(pack_.layerBytes(AssetPack::Layer::Eyes),
                                   pack_.layerBytes(AssetPack::Layer::Mouth));
-    cache_.begin(entryBytes, appcfg::kTileCacheBytes, appcfg::kTileCacheMinBytes);
+    cache_.begin(entryBytes, appcfg::kTileCacheBytes, appcfg::kTileCacheMinBytes,
+                 heapReserve_);
     renderer_.begin(&pack_, &cache_);
 
     renderer_.drawBootProgress("ready", 100);

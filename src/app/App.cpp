@@ -89,6 +89,8 @@ void App::begin() {
     nextAmbientMs_ = now + random(appcfg::kAmbientGestureMinMs, appcfg::kAmbientGestureMaxMs);
 
     display_.setPackName(config_.packName.c_str());
+    display_.setHeapReserve(config_.hasWifi() ? appcfg::kHeapReserveWifi
+                                             : appcfg::kHeapReserveOffline);
     if (!display_.begin()) log_e("display task failed to start");
     if (!audio_.begin()) log_e("audio task failed to start");
     audio_.setMuted(false);
@@ -313,7 +315,7 @@ void App::loop() {
     network_.loop(now);
 
     // The pack manager only exists once there is a network to reach it on.
-    if (network_.wifiConnected()) {
+    if (network_.wifiConnected() && config_.packServerEnabled) {
         if (!web_.running()) web_.begin(&display_, &configStore_, &config_);
         web_.loop();
         if (web_.busy()) return;  // an upload owns the card

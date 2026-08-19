@@ -327,8 +327,15 @@ async def main_async(args):
     log.info("listening on ws://%s:%d%s", args.host, args.port, args.path)
     log.info("stt=%s llm=%s tts=%s", type(stt).__name__, type(llm).__name__, type(tts).__name__)
 
+    # No permessage-deflate. The firmware's WebSocket client does not
+    # implement it, and offering it produces a handshake the server considers
+    # successful and the client quietly does not: the device then sits there
+    # sending nothing, times out after its five second read deadline, and
+    # reconnects forever. Compression buys nothing here anyway - the payload
+    # is PCM.
     async with websockets.serve(app.handle, args.host, args.port,
-                                max_size=2 ** 20, ping_interval=20):
+                                max_size=2 ** 20, ping_interval=20,
+                                compression=None):
         await stop
     log.info("shutting down")
 

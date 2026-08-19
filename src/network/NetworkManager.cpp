@@ -66,7 +66,11 @@ void NetworkManager::loop(uint32_t nowMs) {
         ws_.begin(cfg_.serverHost.c_str(), cfg_.serverPort, cfg_.serverPath.c_str());
         ws_.onEvent(wsThunk);
         ws_.setReconnectInterval(appcfg::kWsReconnectMs);
-        ws_.enableHeartbeat(appcfg::kWsPingIntervalMs, 3000, 2);
+        // No client-side heartbeat. The server pings every 20 seconds, which
+        // is what keeps the link alive and detects a dead peer; running a
+        // second heartbeat on a part with 80 KB of heap only adds a way for
+        // the connection to be torn down and rebuilt, and each rebuild costs
+        // memory that is not fully returned.
         wsStarted_ = true;
     }
     if (wsStarted_) ws_.loop();
@@ -77,6 +81,8 @@ void NetworkManager::wsThunk(WStype_t type, uint8_t* payload, size_t length) {
 }
 
 void NetworkManager::onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
+    log_i("ws event %d len=%u heap=%u", (int)type, (unsigned)length,
+          (unsigned)ESP.getFreeHeap());
     switch (type) {
         case WStype_CONNECTED:
             wsConnected_ = true;
@@ -166,7 +172,9 @@ void NetworkManager::sendHello() {
     doc["ip"] = ip_;
     String out;
     serializeJson(doc, out);
-    emitText(out);
+    const bool ok = wsConnected_ ? ws_.sendTXT(out) : true;
+    log_i("hello %u bytes -> %s", (unsigned)out.length(), ok ? "sent" : "FAILED");
+    if (serialLink_) emitText(out);
 }
 
 void NetworkManager::sendListenBegin() {
