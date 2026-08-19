@@ -19,8 +19,8 @@ speech synthesis. The device keeps working when the server does not.
 M5GO IoT Kit v2.5 / v2.6 / v2.7 - classic ESP32, 320x240 ILI9341, analog mic
 on GPIO34, 1 W speaker on GPIO25, MPU6886, 10 SK6812 LEDs on GPIO15, microSD.
 No PSRAM. A microSD card of any size, **formatted FAT32** - see
-[docs/SD_SETUP.md](docs/SD_SETUP.md), because a 64 GB card arrives as exFAT
-and will not mount.
+[docs/SD_SETUP.md](docs/SD_SETUP.md), because larger cards commonly arrive as
+exFAT and will not mount until reformatted.
 
 ## Quick start
 
@@ -28,8 +28,9 @@ and will not mount.
 # 1. build and flash
 pio run -e m5go -t upload
 
-# 2. build the character pack (about 11 MB, 37 clips)
-python tools/pack_assets.py --out build/sd
+# 2. validate and build the Kizuna character pack
+python tools/validate_kizuna_sources.py
+python tools/build_kizuna_pack.py --out build/sd
 
 # 3. put it on the card - over USB, no card removal needed
 python tools/push_sd.py
@@ -57,8 +58,8 @@ just says OFFLINE in the status bar.
 | **B+C** 3.5 s | Clear settings and reboot |
 | **B+C** at power-on | Wi-Fi setup portal |
 
-Tilting the device moves its gaze. Shaking it startles it. Picking it up gets
-its attention. None of that needs the server.
+Tilting the device moves its gaze. Shaking it startles it and can play a comic
+one-shot. Picking it up gets its attention. None of that needs the server.
 
 ## Server
 
@@ -95,7 +96,8 @@ one hop away instead.
 
 Packs live on the SD card and sit side by side; the device picks one by name.
 Which artwork means what is data, not code - see
-[docs/ASSET_SPEC.md](docs/ASSET_SPEC.md) to add a character.
+[docs/ASSET_SPEC.md](docs/ASSET_SPEC.md) to add a character and
+[docs/KIZUNA_PACK.md](docs/KIZUNA_PACK.md) for the Kizuna expression/loop map.
 
 Three ways to manage them: `tools/push_sd.py` over USB (incremental, CRC
 compared), `http://<device-ip>/` over Wi-Fi (upload, delete, switch), or a
@@ -107,13 +109,20 @@ The LCD and the SD card share one SPI bus, so every tile crosses it twice -
 read from the card, written to the panel. Around 850 KB/s of artwork fits.
 That budget is measured at boot rather than assumed, and it is why:
 
-- nothing is decoded at runtime; frames are raw RGB565 in the panel's own
-  byte order,
-- only the eye and mouth rectangles move between expression changes,
-- a full-screen repaint is spread progressively across several ticks.
+- nothing is decoded at runtime; frames are raw RGB565 in the panel's own byte
+  order,
+- eye/mouth changes stay in small tiles and can continue at the 30 Hz display
+  loop,
+- a full-screen repaint is spread progressively across several ticks,
+- full-screen comic gestures are short one-shots capped at 5 fps, then the
+  normal layered face is restored.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
-[docs/TUNING.md](docs/TUNING.md).
+A 32 GB card is therefore useful for storing many poses, expressions and
+one-shots; it does not increase the instantaneous bandwidth of the shared SPI
+bus.
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
+[docs/TUNING.md](docs/TUNING.md), and [docs/KIZUNA_PACK.md](docs/KIZUNA_PACK.md).
 
 ## Layout
 
@@ -134,6 +143,8 @@ server/             the speech and language server
 
 ## Status
 
-Built and verified on hardware: SD mount at 1.47 MB/s, 30 Hz render loop,
-blink and viseme tiles, USB pack push, and the full server round trip.
-See [docs/PROTOCOL.md](docs/PROTOCOL.md) for the wire format.
+The original hardware path is verified on M5GO: SD mount at 1.47 MB/s, 30 Hz
+render loop, blink and viseme tiles, USB pack push, and the full server round
+trip. Kizuna builds on that path by adding a larger semantic expression set and
+short full-screen gesture playback; see the PR/testing notes for validation of
+those changes.
