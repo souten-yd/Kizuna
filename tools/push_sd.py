@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import binascii
+import re
 import sys
 import time
 from pathlib import Path
@@ -23,6 +24,10 @@ from pathlib import Path
 import serial
 
 BLOCK = 4096
+
+# ESP-IDF and Arduino-ESP32 log lines: "[12345][E][vfs_api.cpp:105] open(): ..."
+# and the early-boot "E (282) psram: ..." form.
+LOG_LINE = re.compile(r"^(\[\s*\d+\]\[[VDIWE]\]\[|[VDIWE] \(\d+\) )")
 
 
 class Device:
@@ -35,14 +40,24 @@ class Device:
 
     # ------------------------------------------------------------- plumbing --
     def line(self, timeout: float = 10.0) -> str:
-        self.ser.timeout = timeout
-        raw = self.ser.readline()
-        if not raw:
-            raise TimeoutError("no response from the device")
-        text = raw.decode("utf-8", "replace").strip()
-        if self.verbose:
-            print(f"    < {text}")
-        return text
+        # The firmware logs to this same port, so a reply is whatever is not a
+        # log line. Reading one without checking desynchronises the whole
+        # dialogue: the log lands as the answer to the previous command and
+        # every reply after it is off by one.
+        deadline = time.monotonic() + timeout
+        while True:
+            self.ser.timeout = max(0.1, deadline - time.monotonic())
+            raw = self.ser.readline()
+            if not raw:
+                raise TimeoutError("no response from the device")
+            text = raw.decode("utf-8", "replace").strip()
+            if LOG_LINE.match(text):
+                if self.verbose:
+                    print(f"    . {text}")
+                continue
+            if self.verbose:
+                print(f"    < {text}")
+            return text
 
     def command(self, text: str) -> str:
         if self.verbose:
@@ -51,9 +66,9 @@ class Device:
         self.ser.flush()
         return self.line()
 
-    def connect(self) -> str:
+    def _ping(self, tries: int) -> str | None:
         # The firmware may be mid-boot; give it a few tries before failing.
-        for _ in range(20):
+        for _ in range(tries):
             self.ser.reset_input_buffer()
             self.ser.write(b"ping\n")
             self.ser.flush()
@@ -62,6 +77,26 @@ class Device:
                 raw = self.ser.readline()
                 if raw.startswith(b"pong"):
                     return raw.decode().strip()
+        return None
+
+    def connect(self) -> str:
+        reply = self._ping(20)
+        if reply:
+            return reply
+
+        # A run that died mid-transfer left the device at the transfer speed,
+        # and the next run then talks to it in a baud rate it cannot hear.
+        # That looks exactly like a board with no firmware, so rather than say
+        # so, look for it where it actually is.
+        if self._transfer_baud != self.ser.baudrate:
+            slow = self.ser.baudrate
+            self.ser.baudrate = self._transfer_baud
+            reply = self._ping(4)
+            if reply:
+                print(f"  device was left at {self._transfer_baud} baud; recovered")
+                return reply
+            self.ser.baudrate = slow
+
         raise SystemExit("no 'pong' from the device - is the firmware running?")
 
     def speed_up(self):
