@@ -56,10 +56,15 @@ def check_image(path: Path, rel: str, report: Report):
 
     if image.mode != "RGBA":
         report.error(f"{rel}: mode is {image.mode}, expected RGBA")
-        return None
+        image = image.convert("RGBA")
     if image.size != CANVAS:
         report.error(f"{rel}: size is {image.size}, expected {CANVAS}")
-        return None
+        # Keep going anyway. Stopping here means a regenerated delivery has to
+        # be run past this tool once per defect; the registration checks below
+        # are the ones that cost a redraw, so they are worth reporting even
+        # when the canvas is the wrong shape. They scale to CANVAS first, so
+        # what they report is the proportion, which is what matters.
+        image = image.resize(CANVAS, Image.LANCZOS)
 
     arr = np.asarray(image)
     alpha = arr[:, :, 3]
@@ -84,6 +89,17 @@ def check_image(path: Path, rel: str, report: Report):
         if rgb.mean() > 236:
             report.warn(f"{rel}: soft edges are near-white - possible halo from "
                         "a removed background")
+
+    # A wash of barely-visible pixels over most of the canvas is what some
+    # image tools leave behind when asked to export "transparent": the
+    # background is still there at a few percent alpha. It survives every
+    # visual check - the file looks clean in a viewer - and then composites
+    # as a grey film over whatever the device draws behind the character.
+    faint = ((alpha > 4) & (alpha <= 40)).mean()
+    if faint > 0.25:
+        report.error(f"{rel}: {faint:.0%} of the canvas is a faint wash rather "
+                     f"than transparent; the background was exported at low "
+                     f"alpha instead of removed")
     return arr
 
 
