@@ -1,0 +1,4 @@
+# Deliveries under review are not part of the repository; only the template
+# generator and the spec are.
+eyes/
+_review/*.png

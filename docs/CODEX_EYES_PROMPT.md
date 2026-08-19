@@ -8,6 +8,21 @@ Ask for step 1 first and look at what comes back before asking for step 2.
 Requesting all twenty-two at once is what produced twenty-two independent
 drawings last time, which is the defect this replaces.
 
+## Hand over the template with it
+
+`assets/kizuna/_review/eye_template.png` is a 1280x960 image of the face the
+eyes have to land on, faded, with the eye line, the two pupil centres and the
+eye rectangle marked on it. Regenerate it any time with:
+
+```bash
+python tools/make_eye_template.py
+```
+
+Give that file to Codex along with the prompt. Coordinates in prose are
+something to get wrong - two deliveries in a row came back with the eyes about
+2.5x too far apart and twice the size, on a canvas that was neither 1280x960
+nor the same shape twice. A picture of where they go is not.
+
 ---
 
 ## Step 1 — the master
@@ -20,22 +35,32 @@ drawings last time, which is the defect this replaces.
 > are drawing **only the two eyes** - no face, no hair, no brows, no
 > eyelashes belonging to a brow, nothing else.
 >
+> **Draw them onto the attached template.** `eye_template.png` is the face
+> they belong to, at the exact size and position the device uses. Put the eyes
+> where the face's eyes are - matching that picture is the requirement, and
+> the numbers below only restate it.
+>
 > Technical requirements, all of them mandatory:
 >
-> - Canvas exactly **1280 x 960 px**, RGBA PNG.
+> - Canvas exactly **1280 x 960 px** - the same size as the template - RGBA
+>   PNG. Do not deliver 1536x1024, 1448x1086, or any other size; the file is
+>   composited pixel for pixel and is not rescaled.
 > - The background is **fully transparent**. Not white, not a checkerboard,
->   not a near-white halo around the line art. Alpha 0 everywhere except the
->   eyes themselves.
-> - The face's centre line is **x = 640**. Pupil centres sit on **y = 448**
->   and are **192 px apart**, i.e. at x = 544 and x = 736.
-> - Each eye is roughly 160 px wide - the head fills most of the canvas, so
->   the eyes are large.
+>   not a near-white halo, and not a low-alpha wash of the background you were
+>   asked to remove. Alpha 0 everywhere except the eyes themselves.
+> - Pupil centres on the green marks: **y = 448**, at **x = 544 and x = 736**.
+> - Both eyes together fit inside the blue rectangle, **x 384..896,
+>   y 328..504**. Nothing you draw may leave it. In the previous delivery each
+>   eye alone was wider than half that box.
 > - Do not crop to the bounding box of the eyes. Do not centre the eyes on
 >   their own canvas. The eyes sit where they belong on a full-size canvas
 >   that is otherwise empty.
+> - **Remove the template layer before exporting.** The delivered PNG contains
+>   the eyes and nothing else - no face, no guide lines, no labels.
 > - No captions, numbers, frames, labels or watermarks anywhere in the image.
 >
-> Deliver it as `eyes/open.png`.
+> Deliver **one file**, `open.png`. Not a contact sheet, not a grid, not a
+> preview of several parts. One PNG with one pair of eyes on it.
 
 Check it before continuing: the file must be 1280x960 RGBA, the corners must
 be transparent, and opening it over a face layer must need no nudging.
