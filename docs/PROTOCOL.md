@@ -77,3 +77,40 @@ Losing the connection is not a failure mode that needs handling by the
 server. The device keeps blinking, tracking tilt with its gaze, reacting to
 being picked up, and answering its buttons; the status bar changes to
 OFFLINE and the face flashes `confused` once. Reconnection is automatic.
+
+## The same protocol over USB
+
+Wi-Fi is the transport the product ships with. On a bench it is also the
+slowest step in every debug loop: a board that has just been flashed has no
+credentials, and the cable that flashed it is still attached.
+
+So the firmware carries these same frames over that cable. `link on` in the
+serial console (see `SerialConsole.hpp`) makes the device report itself
+connected and start emitting its outbound messages there:
+
+```text
+@tx  <len>\n<json bytes>     one protocol message, device to host
+@txb <len>\n<pcm bytes>      microphone audio, device to host
+```
+
+and accept the server's messages the same way:
+
+```text
+rx  <len>\n<json bytes>      one protocol message, host to device
+rxb <len>\n<pcm bytes>       speech, host to device
+```
+
+Lengths are prefixed rather than delimited because the port also carries the
+firmware's log lines, and a host needs to find frame boundaries without
+scanning for a terminator that could occur inside PCM.
+
+`tools/usb_link.py` relays that to a normal WebSocket server, which therefore
+needs no changes and cannot tell the difference:
+
+```bash
+python tools/usb_link.py --url ws://127.0.0.1:8765/m5companion
+```
+
+Speech is 32 kB/s in each direction, so the link switches to 921600 baud
+before it starts; 115200 would not carry one direction, let alone two. Both
+transports can be live at once - the device sends to whichever is up.

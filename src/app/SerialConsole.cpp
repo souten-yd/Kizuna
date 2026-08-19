@@ -5,6 +5,7 @@
 
 #include "AppConfig.hpp"
 #include "display/DisplayTask.hpp"
+#include "network/NetworkManager.hpp"
 #include "storage/ConfigStore.hpp"
 
 namespace {
@@ -57,10 +58,12 @@ uint32_t crc32Update(uint32_t crc, const uint8_t* data, size_t len) {
     return ~crc;
 }
 
-void SerialConsole::begin(DisplayTask* display, ConfigStore* configStore, DeviceConfig* config) {
+void SerialConsole::begin(DisplayTask* display, ConfigStore* configStore, DeviceConfig* config,
+                          NetworkManager* network) {
     display_ = display;
     configStore_ = configStore;
     config_ = config;
+    network_ = network;
     Serial.setTimeout(50);
 }
 
@@ -73,7 +76,12 @@ void SerialConsole::poll() {
             line_[len_] = '\0';
             if (len_) handleLine(line_);
             len_ = 0;
-            return;  // one command per poll keeps the animation loop honest
+            // One command per poll keeps the animation loop honest. Speech
+            // over the link arrives as one 20 ms frame every 16 ms, though,
+            // and dropping to one frame per loop iteration would starve the
+            // jitter buffer, so link mode drains what is already buffered.
+            if (!network_ || !network_->serialLinkActive()) return;
+            continue;
         }
         if (len_ < sizeof(line_) - 1) line_[len_++] = static_cast<char>(c);
     }
@@ -116,6 +124,22 @@ void SerialConsole::handleLine(char* line) {
         }
         cmdPut(path, strtoul(sizeArg, nullptr, 10),
                crcArg ? strtoul(crcArg, nullptr, 10) : 0);
+    } else if (!strcmp(cmd, "link")) {
+        const char* arg = strtok(nullptr, " ");
+        if (!network_ || !arg || (strcmp(arg, "on") && strcmp(arg, "off"))) {
+            Serial.println("err usage: link on|off");
+            return;
+        }
+        Serial.println("ok");
+        network_->setSerialLink(!strcmp(arg, "on"));
+    } else if (!strcmp(cmd, "rx") || !strcmp(cmd, "rxb")) {
+        const char* sizeArg = strtok(nullptr, " ");
+        const uint32_t size = sizeArg ? strtoul(sizeArg, nullptr, 10) : 0;
+        if (!size || size > kBlockBytes) {
+            Serial.println("err bad length");
+            return;
+        }
+        cmdRx(size, cmd[2] == 'b');
     } else if (!strcmp(cmd, "reload")) {
         if (display_) {
             DisplayTask::CommandMsg msg;
@@ -171,7 +195,10 @@ void SerialConsole::cmdStat(const char* path) {
         Serial.println("err display busy");
         return;
     }
-    File f = SD.open(path, FILE_READ);
+    // Checked before opening: SD.open logs an error for a path that is not
+    // there, and a sync of a pack the card has never seen asks about every
+    // file in it. That log goes to the same port as this reply.
+    File f = SD.exists(path) ? SD.open(path, FILE_READ) : File();
     if (!f) {
         Serial.println("missing");
     } else {
@@ -238,7 +265,9 @@ void SerialConsole::cmdPut(const char* path, uint32_t size, uint32_t expectedCrc
     busy_ = true;
 
     ensureParents(path);
-    SD.remove(path);
+    // Guarded for the same reason as stat: removing a path that is not there
+    // logs an error onto the port this dialogue runs over.
+    if (SD.exists(path)) SD.remove(path);
     File f = SD.open(path, FILE_WRITE);
     if (!f) {
         Serial.println("err cannot open for write");
@@ -282,4 +311,21 @@ void SerialConsole::cmdPut(const char* path, uint32_t size, uint32_t expectedCrc
 
     busy_ = false;
     display_->resume();
+}
+
+
+void SerialConsole::cmdRx(uint32_t size, bool binary) {
+    busy_ = true;
+    const bool ok = readExactly(g_block, size, kBlockTimeoutMs);
+    busy_ = false;
+    if (!ok) {
+        Serial.println("err timeout");
+        return;
+    }
+    if (!network_) return;
+    if (binary) {
+        network_->deliverBinary(g_block, size);
+    } else {
+        network_->deliverText(g_block, size);
+    }
 }

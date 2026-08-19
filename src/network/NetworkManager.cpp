@@ -136,8 +136,24 @@ void NetworkManager::handleText(const uint8_t* payload, size_t length) {
     }
 }
 
+void NetworkManager::setSerialLink(bool on) {
+    if (serialLink_ == on) return;
+    serialLink_ = on;
+    if (on) sendHello();
+}
+
+void NetworkManager::emitText(const char* json, size_t length) {
+    if (serialLink_) {
+        // Length prefixed, because the same port carries log lines and the
+        // host must know where a frame ends without scanning for a delimiter.
+        Serial.printf("@tx %u\n", static_cast<unsigned>(length));
+        Serial.write(reinterpret_cast<const uint8_t*>(json), length);
+    }
+    if (wsConnected_) ws_.sendTXT(json, length);
+}
+
 void NetworkManager::sendHello() {
-    if (!wsConnected_) return;
+    if (!serverConnected()) return;
     StaticJsonDocument<448> doc;
     doc["type"] = "hello";
     doc["device"] = "m5go";
@@ -150,34 +166,34 @@ void NetworkManager::sendHello() {
     doc["ip"] = ip_;
     String out;
     serializeJson(doc, out);
-    ws_.sendTXT(out);
+    emitText(out);
 }
 
 void NetworkManager::sendListenBegin() {
-    if (!wsConnected_) return;
-    ws_.sendTXT("{\"type\":\"listen.begin\",\"format\":\"pcm_s16le\",\"rate\":16000}");
+    if (!serverConnected()) return;
+    emitText(String("{\"type\":\"listen.begin\",\"format\":\"pcm_s16le\",\"rate\":16000}"));
 }
 
 void NetworkManager::sendListenEnd(bool cancelled) {
-    if (!wsConnected_) return;
-    ws_.sendTXT(cancelled ? "{\"type\":\"listen.end\",\"cancelled\":true}"
-                          : "{\"type\":\"listen.end\"}");
+    if (!serverConnected()) return;
+    emitText(String(cancelled ? "{\"type\":\"listen.end\",\"cancelled\":true}"
+                              : "{\"type\":\"listen.end\"}"));
 }
 
 void NetworkManager::sendState(CompanionState state, Expression expression) {
-    if (!wsConnected_) return;
+    if (!serverConnected()) return;
     StaticJsonDocument<192> doc;
     doc["type"] = "device.state";
     doc["state"] = stateName(state);
     doc["expression"] = expressionName(expression);
     String out;
     serializeJson(doc, out);
-    ws_.sendTXT(out);
+    emitText(out);
 }
 
 void NetworkManager::sendTelemetry(uint8_t battery, bool charging, uint32_t freeHeap,
                                    uint32_t fpsX10) {
-    if (!wsConnected_) return;
+    if (!serverConnected()) return;
     StaticJsonDocument<256> doc;
     doc["type"] = "device.telemetry";
     doc["battery"] = battery;
@@ -187,10 +203,18 @@ void NetworkManager::sendTelemetry(uint8_t battery, bool charging, uint32_t free
     doc["rssi"] = rssi();
     String out;
     serializeJson(doc, out);
-    ws_.sendTXT(out);
+    emitText(out);
 }
 
 bool NetworkManager::sendAudio(const int16_t* samples, size_t sampleCount) {
-    if (!wsConnected_ || !samples || !sampleCount) return false;
-    return ws_.sendBIN(reinterpret_cast<const uint8_t*>(samples), sampleCount * sizeof(int16_t));
+    if (!samples || !sampleCount) return false;
+    const size_t bytes = sampleCount * sizeof(int16_t);
+    if (serialLink_) {
+        Serial.printf("@txb %u\n", static_cast<unsigned>(bytes));
+        Serial.write(reinterpret_cast<const uint8_t*>(samples), bytes);
+    }
+    if (wsConnected_) {
+        return ws_.sendBIN(reinterpret_cast<const uint8_t*>(samples), bytes);
+    }
+    return serialLink_;
 }
