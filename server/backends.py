@@ -13,7 +13,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
+import re
 import shutil
 import subprocess
 import wave
@@ -174,23 +176,44 @@ def stereo_to_mono(pcm: bytes) -> bytes:
 
 
 def resample_linear(pcm: bytes, src_rate: int, dst_rate: int) -> bytes:
-    """Linear resampling. Good enough for a 1 W speaker on a plastic box."""
+    """Rate conversion with an anti-aliasing filter when going down.
+
+    Interpolation alone is not enough and the failure is audible: Piper speaks
+    at 22050 Hz and the firmware plays at 16000, so everything the voice has
+    above 8 kHz - most of every "s" and "sh" - folds back into the band as
+    inharmonic noise. It sounds like grit over the whole reply, not like a
+    missing treble, which is why it is worth a filter rather than a faster
+    interpolator.
+    """
     if src_rate == dst_rate or not pcm:
         return pcm
-    import array
+    import numpy as np
 
-    src = array.array("h", pcm)
-    n_out = int(len(src) * dst_rate / src_rate)
-    out = array.array("h", bytes(n_out * 2))
-    step = len(src) / n_out
-    for i in range(n_out):
-        pos = i * step
-        j = int(pos)
-        frac = pos - j
-        a = src[j]
-        b = src[j + 1] if j + 1 < len(src) else a
-        out[i] = int(a + (b - a) * frac)
-    return out.tobytes()
+    x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
+    if x.size == 0:
+        return pcm
+
+    if dst_rate < src_rate:
+        # Windowed-sinc low pass at the destination's Nyquist, with a little
+        # margin so the transition band lands below it rather than across it.
+        cutoff = 0.45 * dst_rate / src_rate
+        taps = 63
+        n = np.arange(taps) - (taps - 1) / 2
+        h = np.sinc(2 * cutoff * n) * np.hamming(taps)
+        h /= h.sum()
+        # Pad by reflection: zero padding puts a click at each end, and a
+        # sentence is short enough that both ends are audible.
+        pad = taps // 2
+        padded = np.concatenate([x[pad:0:-1], x, x[-2:-pad - 2:-1]])
+        x = np.convolve(padded, h, mode="valid")[:len(x)]
+
+    n_out = int(len(x) * dst_rate / src_rate)
+    pos = np.arange(n_out, dtype=np.float64) * (len(x) / n_out)
+    j = pos.astype(np.int64)
+    frac = (pos - j).astype(np.float32)
+    j2 = np.minimum(j + 1, len(x) - 1)
+    y = x[j] * (1.0 - frac) + x[j2] * frac
+    return np.clip(y, -32768, 32767).astype(np.int16).tobytes()
 
 
 # --------------------------------------------------------------------- llm ---
@@ -378,3 +401,138 @@ class OpenAiLlm:
                 chunk = choices[0].get("delta", {}).get("content")
                 if chunk:
                     yield chunk
+
+
+# ------------------------------------------------------- QnapAssistant ------
+# A NAS running SenseVoice, Qwen3 and Piper behind one HTTP port. It also
+# offers a single /v1/voice/chat that does all three in one call and returns
+# the audio base64 encoded inside JSON - convenient, but 455 KB of JSON for a
+# six second reply, and it cannot start speaking until the last word has been
+# synthesised. Going through the three endpoints separately keeps the audio as
+# raw WAV and lets speech start on the first sentence, which is most of what
+# makes a companion feel responsive.
+
+class QnapStt:
+    """SenseVoice on the NAS, via /v1/audio/transcriptions."""
+
+    def __init__(self, base_url: str, timeout: float = 120.0):
+        import httpx
+
+        self._client = httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=timeout)
+
+    async def transcribe(self, pcm: bytes) -> str:
+        response = await self._client.post(
+            "/audio/transcriptions", content=pcm_to_wav(pcm),
+            headers={"Content-Type": "audio/wav"})
+        response.raise_for_status()
+        body = response.json()
+        # SenseVoice tags language, emotion and events in-band; the reply is
+        # spoken out loud, so the tags are noise.
+        return re.sub(r"<\|[^|]*\|>", "", body.get("text", "")).strip()
+
+
+class QnapTts:
+    """Piper Plus on the NAS, via /v1/audio/speech.
+
+    Returns audio/wav directly rather than base64 in JSON, which is the whole
+    reason to prefer it over /v1/voice/chat on a device with 78 KB of heap.
+    """
+
+    def __init__(self, base_url: str, backend: str = "piper_plus",
+                 language: str = "ja", speed: float = 1.0, timeout: float = 120.0,
+                 peak: float = 0.55):
+        import httpx
+
+        self._client = httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=timeout)
+        self._backend = backend
+        self._language = language
+        self._speed = speed
+        self._peak = peak
+
+    async def synthesize(self, text: str) -> bytes:
+        if not text.strip():
+            return b""
+        response = await self._client.post("/audio/speech", json={
+            "text": text, "lang": self._language,
+            "backend": self._backend, "speed": self._speed,
+        })
+        response.raise_for_status()
+        return shape_for_speaker(wav_to_pcm16(response.content), target_peak=self._peak)
+
+
+def wav_to_pcm16(data: bytes) -> bytes:
+    """Any mono/stereo PCM16 WAV to the 16 kHz mono the firmware plays."""
+    if not data:
+        return b""
+    with wave.open(BytesIO(data), "rb") as w:
+        pcm = w.readframes(w.getnframes())
+        rate = w.getframerate()
+        if w.getnchannels() == 2:
+            pcm = stereo_to_mono(pcm)
+    return resample_linear(pcm, rate, SAMPLE_RATE)
+
+
+def shape_for_speaker(pcm: bytes, target_peak: float = 0.55,
+                      highpass_hz: float = 130.0, ratio: float = 3.0) -> bytes:
+    """Conditions speech for a 1 W speaker driven by an 8-bit DAC.
+
+    The M5Stack Core drives its speaker from GPIO25, the ESP32's internal DAC,
+    which has eight bits and no more. Piper's output peaks at 99% of full scale
+    but sits at about 14% RMS, so the quiet majority of a sentence is being
+    reproduced with roughly five of those eight bits - and five-bit speech is
+    audibly gritty however clean the file is.
+
+    Three things help, in this order:
+
+    - a high pass, because the speaker cannot move enough air below ~130 Hz to
+      produce those frequencies at all; they only eat headroom and rattle the
+      case,
+    - gentle compression, which is what actually buys back DAC resolution: it
+      lifts the average level without lifting the peaks,
+    - a little headroom under full scale, so the reply does not clip into the
+      amplifier on its loudest syllable.
+
+    That last one turned out to matter most. The M5Stack Core multiplies the
+    mixer output by eight before the DAC, on top of the volume setting, so a
+    reply normalised anywhere near full scale is driven hard into the limit -
+    which is audible as a chirping warble over the voice, and which goes away
+    when the same file is played quieter. 0.55 is where it stopped; it is a
+    starting point to tune with --speaker-peak, not a constant of nature.
+    """
+    if not pcm:
+        return pcm
+    import numpy as np
+
+    x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+    if x.size < 64:
+        return pcm
+
+    # Windowed-sinc high pass, by spectral inversion of a low pass. Linear
+    # phase, and one convolution rather than a Python loop over 120,000
+    # samples.
+    taps = 127
+    n = np.arange(taps) - (taps - 1) / 2
+    lp = np.sinc(2 * (highpass_hz / SAMPLE_RATE) * n) * np.hamming(taps)
+    lp /= lp.sum()
+    hp = -lp
+    hp[(taps - 1) // 2] += 1.0
+    pad = taps // 2
+    padded = np.concatenate([x[pad:0:-1], x, x[-2:-pad - 2:-1]])
+    x = np.convolve(padded, hp, mode="valid")[:x.size].astype(np.float32)
+
+    # Compression on a smoothed envelope, so it rides the sentence rather than
+    # pumping on individual glottal pulses.
+    env = np.abs(x)
+    win = max(1, int(SAMPLE_RATE * 0.02))
+    kernel = np.ones(win, dtype=np.float32) / win
+    env = np.convolve(env, kernel, mode="same")
+    threshold = 0.06
+    gain = np.ones_like(env)
+    loud = env > threshold
+    gain[loud] = (threshold / env[loud]) ** (1.0 - 1.0 / ratio)
+    x = x * gain
+
+    peak = float(np.abs(x).max())
+    if peak > 0:
+        x = x * (target_peak / peak)
+    return np.clip(x * 32768.0, -32768, 32767).astype(np.int16).tobytes()
