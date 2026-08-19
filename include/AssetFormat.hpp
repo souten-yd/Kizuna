@@ -32,7 +32,18 @@ enum Flags : uint16_t {
     kFlagNone = 0,
     // Frames form a ping-pong loop (0,1,..,N-1,N-2,..,1) instead of wrapping.
     kFlagPingPong = 1 << 0,
+    // Frames are stored as the tiles that changed since the previous frame,
+    // rather than in full. See "Tile-delta clips" below.
+    kFlagTileDelta = 1 << 1,
 };
+
+// Side of a square tile in a tile-delta clip, in pixels. 16 keeps the index
+// small (300 entries for a whole screen) while still being fine enough that a
+// head moving a few pixels does not dirty the shoulders.
+constexpr uint16_t kTileSide = 16;
+constexpr uint32_t kTileBytes = kTileSide * kTileSide * 2;
+// A full 320x240 screen is 20x15 tiles.
+constexpr uint16_t kMaxTilesPerFrame = 320;
 
 #pragma pack(push, 1)
 struct Header {
@@ -52,6 +63,37 @@ struct Header {
 #pragma pack(pop)
 
 static_assert(sizeof(Header) == kHeaderBytes, "m5a header must be 32 bytes");
+
+// ---------------------------------------------------------------------------
+// Tile-delta clips (kFlagTileDelta)
+//
+// A full-screen frame is 150 KB, and the LCD and the SD card share one SPI bus
+// carrying about 850 KB/s in total - so a clip stored as whole frames plays at
+// 5.5 fps however short it is. Measured on the Kizuna pack, only 59% of a
+// frame differs from the one before it, and 36% of that is the body moving
+// when it did not need to. Sending just the tiles that changed is what takes a
+// gesture from a slideshow to something that reads as motion.
+//
+// Layout when the flag is set:
+//
+//   [ 32 byte header ]
+//   [ uint32 frameOffset[frameCount + 1] ]   byte offsets from the file start
+//   [ frame 0 ][ frame 1 ] ... [ frame N-1 ]
+//
+// frameOffset[i+1] - frameOffset[i] is frame i's size, and the extra last
+// entry is the end of the data, so no frame needs the next one's header to be
+// read. Each frame is:
+//
+//   [ uint16 tileCount ]
+//   [ uint16 tileIndex[tileCount] ]   tile number, row major: ty * tilesX + tx
+//   [ tileCount * kTileBytes of pixels, in index order ]
+//
+// Frame 0 always carries every tile, so playback can start there without a
+// prior frame. `frameBytes` in the header is the largest frame payload rather
+// than a fixed stride; nothing seeks by multiplying it.
+constexpr uint32_t kFrameTableBytes(uint16_t frameCount) {
+    return static_cast<uint32_t>(frameCount + 1) * sizeof(uint32_t);
+}
 
 // ---------------------------------------------------------------------------
 // Frame indexing conventions

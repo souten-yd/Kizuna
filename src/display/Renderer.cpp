@@ -152,6 +152,8 @@ size_t Renderer::drawTile(Expression e, AssetPack::Layer layer, uint16_t frame) 
 size_t Renderer::drawClipFrame(const char* clip, uint16_t frame) {
     if (!pack_ || !pack_->ready() || !band_ || !pack_->hasClip(clip)) return 0;
 
+    if (pack_->clipIsTileDelta(clip)) return drawClipFrameTiles(clip, frame);
+
     uint16_t width = 0;
     const int16_t bandRows = appcfg::kBandRows;
     size_t moved = 0;
@@ -160,6 +162,33 @@ size_t Renderer::drawClipFrame(const char* clip, uint16_t frame) {
         if (!pack_->readClipBand(clip, frame, row, rows, band_, width) || !width) return moved;
         pushBand(0, row, width, rows, band_);
         moved += static_cast<size_t>(width) * 2 * rows;
+    }
+    overlayDirty_ = true;
+    return moved;
+}
+
+size_t Renderer::drawClipFrameTiles(const char* clip, uint16_t frame) {
+    static uint16_t indices[m5a::kMaxTilesPerFrame];
+    uint16_t count = 0;
+    uint16_t tilesX = 0;
+    if (!pack_->readClipTileIndex(clip, frame, indices, m5a::kMaxTilesPerFrame,
+                                  count, tilesX) || !tilesX) {
+        return 0;
+    }
+
+    // As many tiles per read as the band buffer holds: the seek dominates a
+    // 512 byte tile, so batching is most of the win over reading them singly.
+    const uint16_t batch = max<uint16_t>(1, appcfg::kBandBytes / m5a::kTileBytes);
+    size_t moved = 0;
+    for (uint16_t done = 0; done < count; done += batch) {
+        const uint16_t n = min<uint16_t>(batch, count - done);
+        if (!pack_->readClipTileData(clip, frame, done, n, band_)) break;
+        for (uint16_t i = 0; i < n; ++i) {
+            const uint16_t tile = indices[done + i];
+            pushBand((tile % tilesX) * m5a::kTileSide, (tile / tilesX) * m5a::kTileSide,
+                     m5a::kTileSide, m5a::kTileSide, band_ + i * m5a::kTileBytes);
+        }
+        moved += static_cast<size_t>(n) * m5a::kTileBytes;
     }
     overlayDirty_ = true;
     return moved;

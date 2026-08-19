@@ -364,11 +364,17 @@ def build(args) -> int:
         for gname, spec in recipe.gestures.items():
             t0 = time.time()
             frames = lib.clip_frames(spec["sheet"], spec["frames"], neutral_accent)
-            total_bytes += m5a.write_clip(pack_dir / "clips" / f"{gname}.m5a", frames,
-                                          fps=spec.get("fps", 10))
+            # Gestures are the only full-screen animation, and the SPI bus caps
+            # whole frames at 5.5 fps. Storing the tiles that moved is what
+            # makes them watchable; see m5a.write_delta_clip.
+            written = m5a.write_delta_clip(pack_dir / "clips" / f"{gname}.m5a", frames,
+                                           fps=spec.get("fps", 10))
+            total_bytes += written
             files += 1
             clips[gname] = f"clips/{gname}.m5a"
-            print(f"  clip {gname:<12} {len(frames)} frames  {time.time() - t0:5.1f}s")
+            full = len(frames) * frames[0].size[0] * frames[0].size[1] * 2
+            print(f"  clip {gname:<12} {len(frames)} frames  {time.time() - t0:5.1f}s"
+                  f"  {written / 1024:6.0f} KB ({100 * written / full:.0f}% of full frames)")
 
     if args.preview:
         write_preview(preview, args.preview_path, recipe)

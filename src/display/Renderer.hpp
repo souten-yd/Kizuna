@@ -40,7 +40,9 @@ public:
 
     size_t drawClipFrame(const char* clip, uint16_t frame);
 
+
 private:
+    size_t drawClipFrameTiles(const char* clip, uint16_t frame);
     void pushBand(int16_t x, int16_t y, int16_t w, int16_t rows, const uint8_t* data) const;
     void noteDrawn(const Rect& r);
 

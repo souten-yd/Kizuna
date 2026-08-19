@@ -59,6 +59,15 @@ public:
     // Optional full-screen clips such as boot and one-shot character gestures.
     // Packer fps hints are read from the .m5a header so the recipe owns timing.
     bool hasClip(const char* name) const;
+    // Tile-delta clips (m5a::kFlagTileDelta). The index is small enough to
+    // read whole - 320 entries at most - and the pixels are streamed after it
+    // in batches the caller sizes to its own buffer.
+    bool clipIsTileDelta(const char* name);
+    bool readClipTileIndex(const char* name, uint16_t frame, uint16_t* indices,
+                           uint16_t maxTiles, uint16_t& outCount, uint16_t& outTilesX);
+    bool readClipTileData(const char* name, uint16_t frame, uint16_t first,
+                          uint16_t count, uint8_t* dst);
+
     bool readClipBand(const char* name, uint16_t frame, uint16_t rowStart, uint16_t rows,
                       uint8_t* dst, uint16_t& outWidth);
     uint16_t clipFrameCount(const char* name);

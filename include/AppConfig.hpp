@@ -35,7 +35,12 @@ constexpr uint32_t kMaxTickBusMs = 26;
 
 // Full-screen gesture clips are intentionally slower than the 30 Hz tile loop:
 // a 320x240 RGB565 frame is 150 KiB and SD/LCD share the same SPI bus.
-constexpr uint16_t kGestureMaxFps = 5;
+// Tile-delta clips send about 90 KB per frame against the bus's 850 KB/s
+// rather than a whole 150 KB screen, so the ceiling moved from 5 fps to
+// roughly 9 - and to about 15 once the artwork stops moving the body
+// under a head gesture. Frames that overrun simply take longer; this is
+// the rate to aim at, not a promise.
+constexpr uint16_t kGestureMaxFps = 15;
 
 // ----------------------------------------------------------------- cache ---
 // RAM budget for decoded tiles (eyes / mouth). Kept well under what the heap
