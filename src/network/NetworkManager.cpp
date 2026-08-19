@@ -12,6 +12,8 @@ void NetworkManager::begin(const DeviceConfig& cfg, EventBus& events) {
     cfg_ = cfg;
     events_ = &events;
     instance_ = this;
+    directQnap_ = cfg_.usesQnapStream();
+    qnap_.begin(cfg_, events_, sink_, sinkCtx_);
 
     if (cfg_.wifiSsid.isEmpty()) {
         log_w("no Wi-Fi credentials; staying offline");
@@ -42,9 +44,14 @@ void NetworkManager::loop(uint32_t nowMs) {
     if (up != wifiWasUp_) {
         wifiWasUp_ = up;
         ip_ = up ? WiFi.localIP().toString() : String();
+        qnap_.setNetworkAvailable(up);
         if (events_) {
             events_->post(AppEvent(up ? AppEventType::NetworkConnected
                                       : AppEventType::NetworkDisconnected));
+            if (directQnap_) {
+                events_->post(AppEvent(up ? AppEventType::ServerConnected
+                                          : AppEventType::ServerDisconnected));
+            }
         }
         if (!up && wsConnected_) {
             wsConnected_ = false;
@@ -61,6 +68,11 @@ void NetworkManager::loop(uint32_t nowMs) {
         }
         return;
     }
+
+    // Direct QNAP mode deliberately does not instantiate WebSocketsClient.
+    // On a ~78 KB free-heap device, keeping both network stacks alive only
+    // burns memory and makes reconnect fragmentation worse.
+    if (directQnap_) return;
 
     if (!wsStarted_ && !cfg_.serverHost.isEmpty()) {
         ws_.begin(cfg_.serverHost.c_str(), cfg_.serverPort, cfg_.serverPath.c_str());
@@ -149,6 +161,7 @@ void NetworkManager::setSerialLink(bool on) {
 }
 
 void NetworkManager::emitText(const char* json, size_t length) {
+    if (directQnap_) return;
     if (serialLink_) {
         // Length prefixed, because the same port carries log lines and the
         // host must know where a frame ends without scanning for a delimiter.
@@ -159,7 +172,7 @@ void NetworkManager::emitText(const char* json, size_t length) {
 }
 
 void NetworkManager::sendHello() {
-    if (!serverConnected()) return;
+    if (directQnap_ || !serverConnected()) return;
     StaticJsonDocument<448> doc;
     doc["type"] = "hello";
     doc["device"] = "m5go";
@@ -178,13 +191,24 @@ void NetworkManager::sendHello() {
 }
 
 void NetworkManager::sendListenBegin() {
-    if (!serverConnected()) return;
     uplinkChunks_ = 0;
     uplinkFailures_ = 0;
+    if (directQnap_) {
+        if (!qnap_.startUtterance()) ++uplinkFailures_;
+        return;
+    }
+    if (!serverConnected()) return;
     emitText(String("{\"type\":\"listen.begin\",\"format\":\"pcm_s16le\",\"rate\":16000}"));
 }
 
 void NetworkManager::sendListenEnd(bool cancelled) {
+    if (directQnap_) {
+        log_i("qnap uplink: %u chunks sent, %u failed (%.2f s audio)",
+              (unsigned)uplinkChunks_, (unsigned)uplinkFailures_,
+              uplinkChunks_ * appcfg::kAudioSamplesPerChunk / (float)appcfg::kAudioSampleRate);
+        qnap_.finishUtterance(cancelled);
+        return;
+    }
     if (!serverConnected()) return;
     // What actually left the device, against what the microphone produced.
     // A short utterance at the server can mean a short press, a starved
@@ -197,7 +221,7 @@ void NetworkManager::sendListenEnd(bool cancelled) {
 }
 
 void NetworkManager::sendState(CompanionState state, Expression expression) {
-    if (!serverConnected()) return;
+    if (directQnap_ || !serverConnected()) return;
     StaticJsonDocument<192> doc;
     doc["type"] = "device.state";
     doc["state"] = stateName(state);
@@ -209,7 +233,7 @@ void NetworkManager::sendState(CompanionState state, Expression expression) {
 
 void NetworkManager::sendTelemetry(uint8_t battery, bool charging, uint32_t freeHeap,
                                    uint32_t fpsX10, uint16_t droppedChunks) {
-    if (!serverConnected()) return;
+    if (directQnap_ || !serverConnected()) return;
     StaticJsonDocument<256> doc;
     doc["type"] = "device.telemetry";
     doc["battery"] = battery;
@@ -227,6 +251,11 @@ void NetworkManager::sendTelemetry(uint8_t battery, bool charging, uint32_t free
 
 bool NetworkManager::sendAudio(const int16_t* samples, size_t sampleCount) {
     if (!samples || !sampleCount) return false;
+    if (directQnap_) {
+        const bool ok = qnap_.sendAudio(samples, sampleCount);
+        ok ? ++uplinkChunks_ : ++uplinkFailures_;
+        return ok;
+    }
     const size_t bytes = sampleCount * sizeof(int16_t);
     if (serialLink_) {
         Serial.printf("@txb %u\n", static_cast<unsigned>(bytes));

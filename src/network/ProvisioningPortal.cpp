@@ -39,13 +39,14 @@ void handleRoot() {
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         "<title>M5Companion setup</title><style>"
         "body{font-family:system-ui,sans-serif;background:#12161a;color:#e8eaed;margin:0;padding:24px}"
-        "h1{font-size:20px;color:#ff8a3d;margin:0 0 4px}p{color:#9aa5ad;margin:0 0 20px;font-size:13px}"
+        "h1{font-size:20px;color:#ff8a3d;margin:0 0 4px}h2{font-size:15px;margin:22px 0 10px}"
+        "p{color:#9aa5ad;margin:0 0 20px;font-size:13px}"
         "label{display:block;margin:0 0 14px;font-size:13px;color:#9aa5ad}"
         "input,select{width:100%;box-sizing:border-box;margin-top:5px;padding:10px;border-radius:8px;"
         "border:1px solid #2c343b;background:#1b2127;color:#e8eaed;font-size:15px}"
         "button{width:100%;padding:13px;border:0;border-radius:8px;background:#ff8a3d;color:#12161a;"
         "font-size:16px;font-weight:600}</style>"
-        "<h1>M5Companion</h1><p>Wi-Fi and companion server</p><form method='POST' action='/save'>");
+        "<h1>M5Companion</h1><p>Wi-Fi and voice transport</p><form method='POST' action='/save'>");
 
     // Offer what the radio can actually see; typing an SSID by hand on a phone
     // is where most first-run setups go wrong.
@@ -62,9 +63,25 @@ void handleRoot() {
 
     page += field("ssid", "Wi-Fi SSID", working.wifiSsid);
     page += field("pass", "Wi-Fi password", working.wifiPassword, "password");
+
+    page += F("<h2>Voice transport</h2><label>Mode<select name='voice_transport'>");
+    page += String("<option value='bridge'") +
+            (working.usesQnapStream() ? "" : " selected") +
+            ">Companion bridge (current / WebSocket)</option>";
+    page += String("<option value='qnap_stream'") +
+            (working.usesQnapStream() ? " selected" : "") +
+            ">QnapAssistant direct stream (M5GO)</option></select></label>";
+
+    page += F("<h2>Companion bridge</h2>");
     page += field("host", "Server host or IP", working.serverHost);
     page += field("port", "Server port", String(working.serverPort), "number");
     page += field("path", "WebSocket path", working.serverPath);
+
+    page += F("<h2>QnapAssistant direct</h2>");
+    page += field("qhost", "QNAP host or IP", working.qnapHost);
+    page += field("qport", "QNAP port", String(working.qnapPort), "number");
+    page += field("qpath", "QNAP streaming path", working.qnapPath);
+
     page += field("name", "Device name", working.deviceName);
     page += field("pack", "Character pack", working.packName);
     page += F("<button type='submit'>Save and reboot</button></form>");
@@ -75,15 +92,26 @@ void handleRoot() {
 void handleSave() {
     working.wifiSsid = server->arg("ssid");
     working.wifiPassword = server->arg("pass");
+
+    working.voiceTransport = server->arg("voice_transport");
+    if (!working.voiceTransport.equalsIgnoreCase("qnap_stream")) working.voiceTransport = "bridge";
+
     working.serverHost = server->arg("host");
     working.serverPort = static_cast<uint16_t>(server->arg("port").toInt());
     if (!working.serverPort) working.serverPort = appcfg::kDefaultServerPort;
     working.serverPath = server->arg("path");
     if (working.serverPath.isEmpty()) working.serverPath = appcfg::kDefaultServerPath;
+
+    working.qnapHost = server->arg("qhost");
+    working.qnapPort = static_cast<uint16_t>(server->arg("qport").toInt());
+    if (!working.qnapPort) working.qnapPort = 11435;
+    working.qnapPath = server->arg("qpath");
+    if (working.qnapPath.isEmpty()) working.qnapPath = "/v1/voice/chat/stream?profile=m5go";
+
     working.deviceName = server->arg("name");
     if (working.deviceName.isEmpty()) working.deviceName = "M5GO-Companion";
     working.packName = server->arg("pack");
-    if (working.packName.isEmpty()) working.packName = "claudecode";
+    if (working.packName.isEmpty()) working.packName = "kizuna";
 
     saved = store && store->save(working);
     server->send(200, "text/html; charset=utf-8",

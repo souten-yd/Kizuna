@@ -4,14 +4,16 @@
 #include <WebSocketsClient.h>
 
 #include "AppTypes.hpp"
+#include "QnapStreamClient.hpp"
 #include "app/EventBus.hpp"
 #include "storage/ConfigStore.hpp"
 
-// Wi-Fi + WebSocket transport.
+// Wi-Fi + voice transport.
 //
-// Everything here runs on the Arduino loop task. WebSocketsClient is not
-// thread safe, so audio never touches it directly: the audio task hands PCM to
-// the loop through a queue and the loop does the sending.
+// Existing installations keep using the WebSocket companion bridge. The
+// optional qnap_stream mode talks directly to QnapAssistant using HTTP chunked
+// PCM upload and multipart/mixed binary audio response, avoiding whole-reply
+// buffering on the no-PSRAM M5GO.
 class NetworkManager {
 public:
     using BinarySink = void (*)(const uint8_t* data, size_t len, void* ctx);
@@ -20,7 +22,13 @@ public:
     void loop(uint32_t nowMs);
 
     bool wifiConnected() const;
-    bool serverConnected() const { return wsConnected_ || serialLink_; }
+    bool serverConnected() const {
+        if (directQnap_) return qnap_.online() || serialLink_;
+        return wsConnected_ || serialLink_;
+    }
+    bool directQnapActive() const { return directQnap_; }
+    bool qnapBusy() const { return directQnap_ && qnap_.busy(); }
+    uint32_t qnapFirstAudioMs() const { return qnap_.lastFirstAudioMs(); }
 
     // The USB serial link: the same protocol, over the cable that already
     // flashes the board. Wi-Fi is the product, but a device on a bench with no
@@ -55,7 +63,7 @@ private:
     void onWsEvent(WStype_t type, uint8_t* payload, size_t length);
     void handleText(const uint8_t* payload, size_t length);
     void startWifi();
-    // Routes one outbound message to whichever transport is up.
+    // Routes one outbound message to whichever bridge transport is up.
     void emitText(const char* json, size_t length);
     void emitText(const String& json) { emitText(json.c_str(), json.length()); }
 
@@ -64,9 +72,11 @@ private:
     DeviceConfig cfg_;
     EventBus* events_ = nullptr;
     WebSocketsClient ws_;
+    QnapStreamClient qnap_;
     BinarySink sink_ = nullptr;
     void* sinkCtx_ = nullptr;
 
+    bool directQnap_ = false;
     bool wsStarted_ = false;
     bool wsConnected_ = false;
     bool serialLink_ = false;

@@ -21,6 +21,10 @@ DeviceConfig ConfigStore::load() {
     cfg.serverHost = prefs.getString("host", "");
     cfg.serverPort = prefs.getUShort("port", appcfg::kDefaultServerPort);
     cfg.serverPath = prefs.getString("path", appcfg::kDefaultServerPath);
+    cfg.voiceTransport = prefs.getString("vtrans", "bridge");
+    cfg.qnapHost = prefs.getString("qhost", "");
+    cfg.qnapPort = prefs.getUShort("qport", 11435);
+    cfg.qnapPath = prefs.getString("qpath", "/v1/voice/chat/stream?profile=m5go");
     cfg.deviceName = prefs.getString("name", "M5GO-Companion");
     cfg.packName = prefs.getString("pack", "kizuna");
     cfg.volume = prefs.getUChar("vol", appcfg::kSpeakerVolume);
@@ -38,6 +42,10 @@ bool ConfigStore::save(const DeviceConfig& cfg) {
     prefs.putString("host", cfg.serverHost);
     prefs.putUShort("port", cfg.serverPort);
     prefs.putString("path", cfg.serverPath);
+    prefs.putString("vtrans", cfg.voiceTransport);
+    prefs.putString("qhost", cfg.qnapHost);
+    prefs.putUShort("qport", cfg.qnapPort);
+    prefs.putString("qpath", cfg.qnapPath);
     prefs.putString("name", cfg.deviceName);
     prefs.putString("pack", cfg.packName);
     prefs.putUChar("vol", cfg.volume);
@@ -62,7 +70,7 @@ bool ConfigStore::mergeFromSd(DeviceConfig& cfg) {
 
     File f = SD.open(path, FILE_READ);
     if (!f) return false;
-    StaticJsonDocument<768> doc;
+    StaticJsonDocument<1152> doc;
     const DeserializationError err = deserializeJson(doc, f);
     f.close();
     if (err) {
@@ -82,6 +90,9 @@ bool ConfigStore::mergeFromSd(DeviceConfig& cfg) {
     takeString("wifi_password", cfg.wifiPassword);
     takeString("server_host", cfg.serverHost);
     takeString("server_path", cfg.serverPath);
+    takeString("voice_transport", cfg.voiceTransport);
+    takeString("qnap_host", cfg.qnapHost);
+    takeString("qnap_path", cfg.qnapPath);
     takeString("device_name", cfg.deviceName);
     takeString("pack", cfg.packName);
     if (doc.containsKey("server_port")) {
@@ -91,10 +102,21 @@ bool ConfigStore::mergeFromSd(DeviceConfig& cfg) {
             changed = true;
         }
     }
+    if (doc.containsKey("qnap_port")) {
+        const uint16_t port = doc["qnap_port"];
+        if (port && port != cfg.qnapPort) {
+            cfg.qnapPort = port;
+            changed = true;
+        }
+    }
     if (doc.containsKey("volume")) cfg.volume = doc["volume"];
     if (doc.containsKey("brightness")) cfg.brightness = doc["brightness"];
     if (doc.containsKey("led_brightness")) cfg.ledBrightness = doc["led_brightness"];
     if (doc.containsKey("pack_server")) cfg.packServerEnabled = doc["pack_server"];
+
+    if (!cfg.voiceTransport.equalsIgnoreCase("qnap_stream")) cfg.voiceTransport = "bridge";
+    if (cfg.qnapPort == 0) cfg.qnapPort = 11435;
+    if (cfg.qnapPath.isEmpty()) cfg.qnapPath = "/v1/voice/chat/stream?profile=m5go";
 
     if (changed) save(cfg);
     return changed;
