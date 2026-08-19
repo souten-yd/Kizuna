@@ -22,12 +22,26 @@ def main() -> int:
 
     errors: list[str] = []
     cell_count: dict[str, int] = {}
-    for key, filename in recipe["sheets"].items():
+    for key, spec in recipe["sheets"].items():
+        if isinstance(spec, str):
+            filename, atlas_grid, atlas_tile = spec, None, None
+        else:
+            filename = spec["file"]
+            atlas_grid = tuple(spec.get("grid", ()))
+            atlas_tile = tuple(spec.get("tile", ()))
         path = source_dir / filename
         if not path.exists():
             errors.append(f"{key}: missing {path}")
             continue
         image = Image.open(path).convert("RGB")
+        if atlas_grid and atlas_tile:
+            gx, gy = atlas_grid
+            tx, ty = atlas_tile
+            if image.width % gx or image.height % gy or not (0 <= tx < gx and 0 <= ty < gy):
+                errors.append(f"{key}: invalid atlas geometry")
+                continue
+            aw, ah = image.width // gx, image.height // gy
+            image = image.crop((tx * aw, ty * ah, (tx + 1) * aw, (ty + 1) * ah))
         if image.width % 4 or image.height % 4:
             errors.append(f"{key}: dimensions {image.size} do not divide into a 4x4 grid")
             continue
