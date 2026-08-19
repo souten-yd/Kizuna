@@ -70,6 +70,33 @@ viseme ramp, which is what lip sync actually uses.
 
 That is 50 additional parts for four angles, against 616 for the naive matrix.
 
+## The screen is not all picture
+
+A companion that answers out loud should also show what it heard and what it
+said - a reply is easier to check than to ask for again. So the bottom of the
+screen is a text band, and the artwork gets what is left.
+
+Mocked at full size and read on a 320x240 panel, with M5GFX's built-in
+Japanese gothic:
+
+| Band | Text | Result |
+|---|---|---|
+| 40 px | 14 px, one line | fits, but one line only |
+| 48 px | 16 px, two lines | the second line is clipped |
+| **56 px** | **16 px, two lines** | **both lines fit, 20 full-width characters each** |
+| 64 px | 20 px, two lines | the text runs off the right edge |
+
+**56 px**, then: a status strip and two lines of 16 px Japanese, which is 40
+characters - enough for the short replies this thing gives.
+
+That leaves the artwork **320 x 184**, so the part canvas is **1280 x 736**
+rather than 1280 x 960. Everything else about registration is unchanged; it is
+a shorter canvas, not a different discipline.
+
+The band is always there rather than appearing with text. A character that
+grows and shrinks by a quarter whenever it speaks is worse than one composed
+for the space it actually has.
+
 ## What the framing allows, which is less than it sounds
 
 Look at `assets/kizuna/_review/template_body_front.png` before writing a pose
@@ -79,17 +106,22 @@ room for an arm, let alone a hand on a hip.
 
 That leaves two ways to have poses at all:
 
-- **Zoom out.** More of the body fits, and the face gets smaller in exactly
-  the same proportion. The eye tile is 128x44 of a 320x240 screen today; at
-  half the size it is 64x22, and a blink stops being legible. This is a bad
-  trade for a device whose whole job is a face.
+- **Zoom out.** More of the body fits and the face shrinks with it. Rendered
+  at the real size and compared: at 0.8 the eyes are 77 px across and still
+  crisp; at 0.65 they are 63 px and still clearly legible; at 0.5 they are 48
+  px and it starts to go. The byte cost moves the right way too - a smaller
+  eye tile is 5 KB rather than 11.
 - **Bring the hands to the head.** A hand cupped at the ear, a knuckle under
-  the chin, fingers against a cheek, a wave at head height - all of these are
-  inside the frame already, and all of them read clearly at 320x240.
+  the chin, a wave at head height - all inside the tight frame already.
 
-**Take the second.** A pose here is a hand entering frame near the head, not a
-full-body attitude. It is a tighter vocabulary than a full figure gives, and it
-is the one that survives being 240 pixels tall.
+**Both, at about 0.65 - which is the framing of the character's own gesture
+sheet.** That sheet already draws explaining, pointing, presenting, cheering,
+listening with a hand at the ear, thinking, apologising, a thumbs up, rubbing
+an eye and a raised fist, all with the hands in shot. Matching its framing
+means the reference art is the specification.
+
+The hands still stay at or above shoulder height. That is not a stylistic
+choice; below the shoulders is off the bottom of a 184 px picture.
 
 `body/` therefore holds the shoulders, the collar and whatever the arms are
 doing where they cross into frame - which is usually a forearm and a hand.
