@@ -98,17 +98,19 @@ happy expressions.
 
 ## Source-sheet mapping
 
-| Sheet | Runtime use |
-|---|---|
-| `kizuna_expression_a.webp` | expressions 01–16 |
-| `kizuna_expression_b.webp` | expressions 17–32 plus cheerful variant |
-| `kizuna_eyes.webp` | fixed 12 eye slots |
-| `kizuna_mouth.webp` | 8 viseme slots |
-| `kizuna_head_motion.webp` | nod/look/tilt/lean/idle gesture clips |
-| `kizuna_gestures.webp` | explain/cheer/sleep-pose clips |
-| `kizuna_fullbody.webp` | visual pose reference only; not consumed by the current packer |
+The generated references are packed into `assets/source/kizuna_atlas.webp` as
+a 4x2 atlas. Each used atlas tile is itself an exact 4x4 cell grid:
 
-The sheets referenced by `kizuna.json` are normalized to an exact 4x4 grid,
-so the dedicated Kizuna builder does not need hard-coded per-sheet pixel
-offsets. The full-body reference is kept separately for future authored
-transition clips.
+| Atlas tile | Runtime use |
+|---|---|
+| (0,0) expression A | expressions 01–16 |
+| (1,0) expression B | expressions 17–32 plus cheerful variant |
+| (2,0) eyes | fixed 12 eye slots |
+| (3,0) mouth | 8 viseme slots |
+| (0,1) head motion | nod/look/tilt/lean/idle clips |
+| (1,1) communication gestures | explain/cheer/sleep-pose clips |
+| (2,1) full-body poses | visual pose reference for future authored clips |
+
+The runtime recipe references only the first six regions. The full-body region
+is intentionally retained in the atlas as production reference without adding
+a runtime clip that would consume bandwidth unnecessarily.
