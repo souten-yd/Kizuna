@@ -1,0 +1,81 @@
+{
+  "name": "claudecode",
+  "description": "M5Stack Companion - Claude Code, semi-realistic bust framing",
+  "theme": "light",
+
+  "_geometry": "All values are final 320x240 screen pixels. Rect sizes are a bandwidth decision as much as an artistic one - see docs/TUNING.md.",
+  "geometry": {
+    "eye_center": [160, 112],
+    "eye_span": 48,
+    "eye_rect": [96, 82, 128, 44],
+    "mouth_rect": [128, 124, 64, 40]
+  },
+
+  "_sheets": "Files under assets/source. Every sheet must be a 4x4 grid of cells; cell indices below are the printed label minus one.",
+  "sheets": {
+    "emotion": "emotion_micro.png",
+    "expr": "expression_sheet_v2.png",
+    "eye_a": "eye_blink_set_a.png",
+    "eye_b": "eye_blink_set_b.png",
+    "eye_dir": "eye_direction_set.png",
+    "mouth_a": "mouth_set_a.png",
+    "nod": "nod_vertical_set.png",
+    "shake": "head_shake_set.png",
+    "tilt": "tilt_lean_set.png",
+    "pose8": "head_pose8_set.png",
+    "idle": "idle_motion_set.png"
+  },
+
+  "_eye_slots": "Order is fixed - it must match m5a::EyeSlot in include/AssetFormat.hpp.",
+  "eye_slots": [
+    ["open_center",   "eye_dir", 0],
+    ["open_left",     "eye_dir", 2],
+    ["open_right",    "eye_dir", 6],
+    ["open_up",       "eye_dir", 8],
+    ["open_down",     "eye_dir", 11],
+    ["soft_lower",    "eye_a",   1],
+    ["half",          "eye_a",   4],
+    ["almost_closed", "eye_a",   6],
+    ["closed",        "eye_a",   7],
+    ["wide",          "eye_b",   8],
+    ["sleepy_half",   "eye_b",   13],
+    ["sleepy_closed", "eye_b",   14]
+  ],
+
+  "_visemes": "0..4 track loudness; 5..7 are shapes the director selects deliberately.",
+  "visemes": [
+    ["rest",         "mouth_a", 0],
+    ["tiny",         "mouth_a", 1],
+    ["small",        "mouth_a", 2],
+    ["medium",       "mouth_a", 3],
+    ["wide",         "mouth_a", 4],
+    ["rounded",      "mouth_a", 9],
+    ["smile_closed", "mouth_a", 5],
+    ["smile_open",   "mouth_a", 7]
+  ],
+
+  "_expressions": "Keys must be names the firmware knows (see Expression in include/AppTypes.hpp). accent tints the backdrop.",
+  "expressions": {
+    "neutral":   {"cell": ["emotion", 0],  "accent": [44, 78, 116]},
+    "happy":     {"cell": ["emotion", 2],  "accent": [150, 96, 30]},
+    "excited":   {"cell": ["expr", 3],     "accent": [176, 92, 20]},
+    "thinking":  {"cell": ["emotion", 4],  "accent": [40, 74, 128]},
+    "listening": {"cell": ["emotion", 3],  "accent": [28, 96, 150]},
+    "speaking":  {"cell": ["expr", 5],     "accent": [168, 88, 26]},
+    "confused":  {"cell": ["emotion", 14], "accent": [120, 92, 30]},
+    "sleepy":    {"cell": ["emotion", 13], "accent": [36, 44, 92]},
+    "playful":   {"cell": ["emotion", 12], "accent": [150, 80, 40]},
+    "error":     {"cell": ["emotion", 9],  "accent": [140, 34, 34]}
+  },
+
+  "_gestures": "Full-screen clips. These move the whole head, so they play as video at the fps given rather than as grafted tiles.",
+  "gestures": {
+    "nod":         {"sheet": "nod",   "frames": [0, 1, 2, 3, 4, 5, 6, 7], "fps": 12},
+    "shake":       {"sheet": "shake", "frames": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 15], "fps": 12},
+    "tilt_left":   {"sheet": "tilt",  "frames": [0, 1, 2, 3, 2, 1, 0], "fps": 10},
+    "tilt_right":  {"sheet": "tilt",  "frames": [4, 5, 6, 7, 6, 5, 4], "fps": 10},
+    "lean":        {"sheet": "tilt",  "frames": [8, 9, 10, 11, 10, 15], "fps": 10},
+    "look_around": {"sheet": "pose8", "frames": [0, 3, 3, 0, 4, 4, 0], "fps": 8},
+    "idle_moment": {"sheet": "idle",  "frames": [0, 1, 2, 3, 0], "fps": 8}
+  }
+}

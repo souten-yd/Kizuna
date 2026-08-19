@@ -1,0 +1,331 @@
+#!/usr/bin/env python3
+"""M5Companion server - speech in, thought, speech out.
+
+The M5GO is the body: screen, microphone, speaker, buttons, IMU, LEDs. This is
+the head. It owns the parts that need more than 520 KiB of RAM, and nothing
+else - the device stays useful, animated and responsive even when this process
+is not running.
+
+    python server/companion_server.py --mock            # no models needed
+    python server/companion_server.py --stt whisper --tts espeak
+
+Protocol: see docs/PROTOCOL.md.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import logging
+import re
+import signal
+import time
+from pathlib import Path
+
+import websockets
+
+import backends as be
+
+log = logging.getLogger("companion")
+
+# 20 ms of 16 kHz mono PCM16, matching the firmware's chunk size exactly.
+CHUNK_BYTES = 640
+# Pacing the send slightly faster than real time keeps the device's jitter
+# buffer full without ever overflowing its 24-chunk queue.
+CHUNK_INTERVAL = 0.016
+
+EXPRESSION_TAG = re.compile(r"\[\[\s*([a-z_]+)\s*\]\]")
+KNOWN_EXPRESSIONS = {
+    "neutral", "happy", "excited", "thinking", "listening",
+    "speaking", "confused", "sleepy", "playful", "error",
+}
+# A sentence is the unit of speech synthesis: short enough to start talking
+# quickly, long enough that prosody does not fall apart.
+SENTENCE_END = re.compile(r"(?<=[.!?。！？])\s+|\n+")
+
+
+class Session:
+    """One connected M5GO."""
+
+    def __init__(self, ws, app: "CompanionApp"):
+        self.ws = ws
+        self.app = app
+        self.name = "m5go"
+        self.utterance = bytearray()
+        self.listening = False
+        self.history: list[dict] = []
+        self.speaking_task: asyncio.Task | None = None
+
+    # ------------------------------------------------------------- sending --
+    async def send_json(self, payload: dict):
+        await self.ws.send(json.dumps(payload, ensure_ascii=False))
+
+    async def set_expression(self, name: str, duration_ms: int = 2000):
+        if name in KNOWN_EXPRESSIONS:
+            await self.send_json({"type": "expression", "name": name,
+                                  "duration_ms": duration_ms})
+
+    async def speak(self, pcm: bytes):
+        """Streams one utterance to the device, paced like real time."""
+        if not pcm:
+            return
+        await self.send_json({"type": "speech.begin", "format": "pcm_s16le",
+                              "rate": be.SAMPLE_RATE})
+        try:
+            for offset in range(0, len(pcm), CHUNK_BYTES):
+                await self.ws.send(bytes(pcm[offset:offset + CHUNK_BYTES]))
+                await asyncio.sleep(CHUNK_INTERVAL)
+        finally:
+            await self.send_json({"type": "speech.end"})
+
+    # ------------------------------------------------------------ receiving --
+    async def on_binary(self, data: bytes):
+        if self.listening:
+            self.utterance.extend(data)
+
+    async def on_text(self, raw: str):
+        try:
+            msg = json.loads(raw)
+        except json.JSONDecodeError:
+            log.warning("non-JSON text frame: %.60s", raw)
+            return
+
+        kind = msg.get("type", "")
+        if kind == "hello":
+            self.name = msg.get("name", "m5go")
+            log.info("hello from %s (fw %s, protocol %s)",
+                     self.name, msg.get("fw"), msg.get("protocol"))
+            await self.set_expression("happy", 1200)
+
+        elif kind == "listen.begin":
+            self.utterance.clear()
+            self.listening = True
+            if self.speaking_task and not self.speaking_task.done():
+                # The user pressed the button while we were talking. They win.
+                self.speaking_task.cancel()
+            await self.send_json({"type": "state", "state": "listening",
+                                  "expression": "listening"})
+
+        elif kind == "listen.end":
+            self.listening = False
+            if msg.get("cancelled"):
+                self.utterance.clear()
+                return
+            audio = bytes(self.utterance)
+            self.utterance.clear()
+            self.speaking_task = asyncio.create_task(self.handle_utterance(audio))
+
+        elif kind == "device.state":
+            log.debug("device state=%s expression=%s",
+                      msg.get("state"), msg.get("expression"))
+
+        elif kind == "device.telemetry":
+            log.info("telemetry: battery=%s%% heap=%s fps=%s rssi=%s",
+                     msg.get("battery"), msg.get("heap"), msg.get("fps"), msg.get("rssi"))
+
+    # ---------------------------------------------------------- the pipeline --
+    async def handle_utterance(self, audio: bytes):
+        seconds = len(audio) / (be.SAMPLE_RATE * be.SAMPLE_WIDTH)
+        log.info("utterance: %.2f s (%d bytes)", seconds, len(audio))
+        if seconds < 0.25:
+            await self.set_expression("confused", 1200)
+            return
+
+        if self.app.dump_dir:
+            self.app.dump_dir.mkdir(parents=True, exist_ok=True)
+            path = self.app.dump_dir / f"utterance-{int(time.time())}.wav"
+            path.write_bytes(be.pcm_to_wav(audio))
+            log.info("saved %s", path)
+
+        await self.send_json({"type": "state", "state": "thinking",
+                              "expression": "thinking"})
+
+        try:
+            text = await self.app.stt.transcribe(audio)
+        except Exception:
+            log.exception("transcription failed")
+            await self.set_expression("error", 2500)
+            await self.send_json({"type": "state", "state": "idle"})
+            return
+
+        log.info("heard: %s", text or "(nothing)")
+        if not text:
+            await self.set_expression("confused", 1600)
+            await self.send_json({"type": "state", "state": "idle"})
+            return
+
+        self.history.append({"role": "user", "content": text})
+        # Keep the context bounded; this is a companion, not an archive.
+        del self.history[:-self.app.history_turns * 2]
+
+        reply = ""
+        pending = ""
+        expression_sent = False
+        try:
+            async for delta in self.app.llm.stream(self.history):
+                reply += delta
+                pending += delta
+
+                if not expression_sent:
+                    match = EXPRESSION_TAG.search(pending)
+                    if match:
+                        await self.set_expression(match.group(1), 3000)
+                        expression_sent = True
+                        pending = pending[match.end():]
+                    elif len(pending) > 40:
+                        expression_sent = True  # no tag coming; stop looking
+
+                # Speak sentence by sentence so the first words leave quickly.
+                while expression_sent:
+                    split = SENTENCE_END.search(pending)
+                    if not split:
+                        break
+                    sentence, pending = pending[:split.end()].strip(), pending[split.end():]
+                    if sentence:
+                        await self.say(sentence)
+
+            tail = EXPRESSION_TAG.sub("", pending).strip()
+            if tail:
+                await self.say(tail)
+        except asyncio.CancelledError:
+            log.info("reply interrupted by the user")
+            raise
+        except Exception:
+            log.exception("language model failed")
+            await self.set_expression("error", 2500)
+        else:
+            cleaned = EXPRESSION_TAG.sub("", reply).strip()
+            log.info("said: %s", cleaned)
+            self.history.append({"role": "assistant", "content": cleaned})
+        finally:
+            await self.send_json({"type": "state", "state": "idle"})
+
+    async def say(self, sentence: str):
+        try:
+            pcm = await self.app.tts.synthesize(sentence)
+        except Exception:
+            log.exception("synthesis failed")
+            return
+        await self.speak(pcm)
+
+
+class CompanionApp:
+    def __init__(self, stt, llm, tts, dump_dir: Path | None, history_turns: int):
+        self.stt = stt
+        self.llm = llm
+        self.tts = tts
+        self.dump_dir = dump_dir
+        self.history_turns = history_turns
+
+    async def handle(self, ws):
+        peer = getattr(ws, "remote_address", None)
+        log.info("connected %s", peer)
+        session = Session(ws, self)
+        try:
+            async for message in ws:
+                if isinstance(message, bytes):
+                    await session.on_binary(message)
+                else:
+                    await session.on_text(message)
+        except websockets.ConnectionClosed:
+            pass
+        finally:
+            if session.speaking_task:
+                session.speaking_task.cancel()
+            log.info("disconnected %s", peer)
+
+
+def build_backends(args):
+    if args.mock:
+        args.stt, args.llm = "none", "echo"
+
+    if args.stt == "whisper":
+        stt = be.WhisperStt(args.whisper_model, args.language, args.whisper_compute)
+    else:
+        stt = be.NullStt()
+
+    if args.llm == "claude":
+        llm = be.ClaudeLlm(model=args.model, effort=args.effort)
+    elif args.llm == "ollama":
+        llm = be.OllamaLlm(model=args.ollama_model, host=args.ollama_host,
+                           think=args.ollama_think)
+    else:
+        llm = be.EchoLlm()
+
+    if args.tts == "piper":
+        tts = be.PiperTts(args.piper_voice)
+    elif args.tts == "espeak":
+        tts = be.EspeakTts(args.espeak_voice)
+    elif args.tts == "tone":
+        tts = be.ToneTts()
+    else:
+        tts = be.NullTts()
+
+    return stt, llm, tts
+
+
+async def main_async(args):
+    stt, llm, tts = build_backends(args)
+    app = CompanionApp(stt, llm, tts, args.dump_dir, args.history_turns)
+
+    stop = asyncio.get_running_loop().create_future()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            asyncio.get_running_loop().add_signal_handler(sig, lambda: stop.done() or stop.set_result(None))
+        except NotImplementedError:
+            pass
+
+    log.info("listening on ws://%s:%d%s", args.host, args.port, args.path)
+    log.info("stt=%s llm=%s tts=%s", type(stt).__name__, type(llm).__name__, type(tts).__name__)
+
+    async with websockets.serve(app.handle, args.host, args.port,
+                                max_size=2 ** 20, ping_interval=20):
+        await stop
+    log.info("shutting down")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--host", default="0.0.0.0")
+    ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--path", default="/m5companion", help="informational; any path is accepted")
+    ap.add_argument("--mock", action="store_true",
+                    help="no models: echoes what it heard, for testing the audio path")
+
+    ap.add_argument("--stt", choices=["whisper", "none"], default="whisper")
+    ap.add_argument("--whisper-model", default="base")
+    ap.add_argument("--whisper-compute", default="int8")
+    ap.add_argument("--language", default=None, help="e.g. ja, en; auto-detect when unset")
+
+    ap.add_argument("--llm", choices=["claude", "ollama", "echo"], default="claude")
+    ap.add_argument("--model", default="claude-opus-5", help="Claude model id")
+    ap.add_argument("--effort", choices=["low", "medium", "high"], default="low")
+    ap.add_argument("--ollama-model", default="qwen3:0.6b")
+    ap.add_argument("--ollama-host", default="http://127.0.0.1:11434")
+    ap.add_argument("--ollama-think", action="store_true",
+                    help="let a reasoning model think first; costs seconds of latency")
+
+    ap.add_argument("--tts", choices=["piper", "espeak", "tone", "none"], default="espeak",
+                    help="tone synthesises beeps - useful for testing the audio "
+                         "path on a machine with no TTS installed")
+    ap.add_argument("--piper-voice", default="", help="path to a piper .onnx voice")
+    ap.add_argument("--espeak-voice", default="en")
+
+    ap.add_argument("--history-turns", type=int, default=8)
+    ap.add_argument("--dump-dir", type=Path, default=None,
+                    help="write each captured utterance here as a .wav")
+    ap.add_argument("-v", "--verbose", action="store_true")
+    args = ap.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    asyncio.run(main_async(args))
+
+
+if __name__ == "__main__":
+    main()

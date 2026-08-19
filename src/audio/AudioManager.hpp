@@ -1,0 +1,68 @@
+#pragma once
+
+#include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <freertos/task.h>
+
+#include "AppConfig.hpp"
+
+// Half-duplex audio for the internal analog mic (GPIO34) and 1 W speaker
+// (GPIO25).
+//
+// M5GO cannot run both at once without howling, so the pipeline has exactly
+// one owner at a time and the switch happens on the audio task itself - never
+// from the caller's thread. Callers only ever set an intent.
+class AudioManager {
+public:
+    struct Chunk {
+        uint16_t samples = 0;
+        int16_t data[appcfg::kAudioSamplesPerChunk];
+    };
+
+    bool begin();
+
+    // Intents. Safe to call from any task.
+    void requestCapture();
+    void requestPlayback();
+    void requestIdle();
+
+    bool capturing() const { return mode_ == Mode::Capture; }
+    bool playing() const { return mode_ == Mode::Playback; }
+    bool playbackDrained() const;
+
+    // Producer side: network -> speaker.
+    bool pushPlayback(const uint8_t* data, size_t bytes);
+    // Consumer side: mic -> network. Returns false when nothing is pending.
+    bool popCapture(Chunk& out);
+
+    void setMuted(bool muted);
+    bool muted() const { return muted_; }
+    uint8_t lipLevel() const { return lipLevel_; }
+    uint16_t droppedChunks() const { return dropped_; }
+
+private:
+    enum class Mode : uint8_t { Idle, Capture, Playback };
+
+    static void taskThunk(void* ctx);
+    void run();
+    void applyMode(Mode target);
+    void serviceCapture();
+    void servicePlayback();
+    static uint8_t levelFrom(const int16_t* samples, size_t count);
+
+    QueueHandle_t micQueue_ = nullptr;
+    QueueHandle_t spkQueue_ = nullptr;
+    TaskHandle_t task_ = nullptr;
+
+    volatile Mode mode_ = Mode::Idle;
+    volatile Mode requested_ = Mode::Idle;
+    volatile bool muted_ = false;
+    volatile uint8_t lipLevel_ = 0;
+    volatile uint16_t dropped_ = 0;
+    bool prerolled_ = false;
+
+    Chunk capture_[2];
+    uint8_t captureIdx_ = 0;
+    bool captureWarm_ = false;
+};

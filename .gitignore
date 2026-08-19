@@ -1,0 +1,13 @@
+# Build output
+.pio/
+build/
+*.m5a
+
+# Local tooling
+.venv/
+__pycache__/
+*.pyc
+
+# Editor / OS
+.vscode/
+.DS_Store

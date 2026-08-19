@@ -1,0 +1,16 @@
+# Core transport
+websockets>=12.0
+
+# LLM (default backend)
+anthropic>=0.40.0
+
+# Speech to text (optional; --stt whisper)
+#   faster-whisper runs locally on CPU or GPU and needs no API key.
+faster-whisper>=1.0.0
+
+# Text to speech is a subprocess, not a library. Install one of:
+#   piper-tts   - best quality, per-language voice models
+#   espeak-ng   - tiny, robotic, always available
+
+# Local LLM over Ollama (optional; --llm ollama)
+httpx>=0.27.0
