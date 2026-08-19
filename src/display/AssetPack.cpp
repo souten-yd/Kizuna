@@ -53,7 +53,10 @@ bool AssetPack::load(const char* rootDir) {
         return false;
     }
 
-    DynamicJsonDocument doc(8192);
+    // Kizuna carries 30+ expressions, so give the manifest room to grow. The
+    // document is temporary and is freed before Wi-Fi/audio settle into their
+    // steady-state heap usage.
+    DynamicJsonDocument doc(24576);
     const DeserializationError err = deserializeJson(doc, f);
     f.close();
     if (err) {
@@ -81,8 +84,8 @@ bool AssetPack::load(const char* rootDir) {
         return false;
     }
 
-    // Resolve every expression, falling back to neutral so a partial pack
-    // still boots instead of showing nothing.
+    // Resolve every expression, falling back to neutral so an older/partial
+    // pack remains usable after the firmware learns new Kizuna expressions.
     for (uint8_t i = 0; i < kExpressionCount; ++i) {
         const char* key = expressionName(static_cast<Expression>(i));
         JsonObjectConst entry = expressions[key];
@@ -98,8 +101,23 @@ bool AssetPack::load(const char* rootDir) {
         return false;
     }
 
+    // Historically only the optional boot clip was understood by firmware,
+    // even though the packer already emitted arbitrary gesture clips. Load all
+    // named strings now so any recipe-defined one-shot can actually play.
     JsonObjectConst clips = doc["clips"];
-    if (!clips.isNull()) bootClip_ = join(root_, clips["boot"] | "");
+    if (!clips.isNull()) {
+        for (JsonPairConst kv : clips) {
+            if (clipCount_ >= kMaxClips) {
+                log_w("manifest has more than %u clips; extras ignored", kMaxClips);
+                break;
+            }
+            const char* rel = kv.value().as<const char*>();
+            if (!rel || !*rel) continue;
+            clips_[clipCount_].name = kv.key().c_str();
+            clips_[clipCount_].path = join(root_, rel);
+            ++clipCount_;
+        }
+    }
 
     // Sway is the largest sequentially-read clip, so it is the honest
     // benchmark target for the frame budget.
@@ -108,8 +126,8 @@ bool AssetPack::load(const char* rootDir) {
 
     ready_ = true;
     error_ = "";
-    log_i("pack '%s' loaded: sway=%u viseme=%u eyes=%dx%d mouth=%dx%d", name_.c_str(),
-          swayFrames_, visemeFrames_, rect_[2].w, rect_[2].h, rect_[3].w, rect_[3].h);
+    log_i("pack '%s' loaded: sway=%u viseme=%u clips=%u eyes=%dx%d mouth=%dx%d", name_.c_str(),
+          swayFrames_, visemeFrames_, clipCount_, rect_[2].w, rect_[2].h, rect_[3].w, rect_[3].h);
     return true;
 }
 
@@ -121,16 +139,28 @@ void AssetPack::unload() {
     }
     for (uint8_t i = 0; i < kExpressionCount; ++i)
         for (uint8_t l = 0; l < kLayerCount; ++l) path_[i][l] = "";
+    for (uint8_t i = 0; i < kMaxClips; ++i) {
+        clips_[i].name = "";
+        clips_[i].path = "";
+    }
+    clipCount_ = 0;
     ready_ = false;
     name_ = "";
     root_ = "";
-    bootClip_ = "";
     benchPath_ = "";
 }
 
 const String& AssetPack::clipPath(Expression e, Layer l) const {
     const uint8_t idx = static_cast<uint8_t>(e) < kExpressionCount ? static_cast<uint8_t>(e) : 0;
     return path_[idx][static_cast<uint8_t>(l)];
+}
+
+const String* AssetPack::namedClipPath(const char* name) const {
+    if (!name || !*name) return nullptr;
+    for (uint8_t i = 0; i < clipCount_; ++i) {
+        if (clips_[i].name == name) return &clips_[i].path;
+    }
+    return nullptr;
 }
 
 AssetPack::OpenFile* AssetPack::acquire(const String& path) {
@@ -205,21 +235,29 @@ bool AssetPack::readFrame(Expression e, Layer l, uint16_t frame, uint8_t* dst, s
 }
 
 bool AssetPack::hasClip(const char* name) const {
-    if (!name) return false;
-    if (!strcmp(name, "boot")) return !bootClip_.isEmpty();
-    return false;
+    return namedClipPath(name) != nullptr;
 }
 
 uint16_t AssetPack::clipFrameCount(const char* name) {
-    if (!name || strcmp(name, "boot")) return 0;
-    OpenFile* slot = acquire(bootClip_);
+    const String* path = namedClipPath(name);
+    if (!path) return 0;
+    OpenFile* slot = acquire(*path);
     return slot ? slot->header.frameCount : 0;
+}
+
+uint16_t AssetPack::clipFps(const char* name) {
+    const String* path = namedClipPath(name);
+    if (!path) return 0;
+    OpenFile* slot = acquire(*path);
+    return slot ? slot->header.fps : 0;
 }
 
 bool AssetPack::readClipBand(const char* name, uint16_t frame, uint16_t rowStart, uint16_t rows,
                              uint8_t* dst, uint16_t& outWidth) {
-    if (!name || strcmp(name, "boot") || !dst) return false;
-    OpenFile* slot = acquire(bootClip_);
+    if (!dst) return false;
+    const String* path = namedClipPath(name);
+    if (!path) return false;
+    OpenFile* slot = acquire(*path);
     if (!slot) return false;
 
     const m5a::Header& h = slot->header;
