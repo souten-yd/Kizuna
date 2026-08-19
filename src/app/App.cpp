@@ -86,6 +86,7 @@ void App::begin() {
     input_.begin(now);
     power_.begin(config_.brightness);
     leds_.begin(config_.ledBrightness);
+    nextAmbientMs_ = now + random(appcfg::kAmbientGestureMinMs, appcfg::kAmbientGestureMaxMs);
 
     display_.setPackName(config_.packName.c_str());
     if (!display_.begin()) log_e("display task failed to start");
@@ -149,8 +150,21 @@ void App::handleEvent(const AppEvent& event, uint32_t nowMs) {
             break;
 
         case AppEventType::MotionShake:
+            director_.startle(nowMs);
+            if (state_.state() == CompanionState::Idle) director_.triggerGesture(Gesture::Shake);
+            break;
+
         case AppEventType::MotionPickup:
             director_.startle(nowMs);
+            if (state_.state() == CompanionState::Idle) director_.triggerGesture(Gesture::TiltLeft);
+            break;
+
+        case AppEventType::ServerConnected:
+            if (state_.state() != CompanionState::Sleep) director_.triggerGesture(Gesture::Nod);
+            break;
+
+        case AppEventType::SleepRequested:
+            if (state_.state() != CompanionState::Sleep) director_.triggerGesture(Gesture::SleepPose);
             break;
 
         case AppEventType::NetworkDisconnected:
@@ -204,6 +218,89 @@ void App::serviceButtons(uint32_t nowMs) {
     }
 }
 
+void App::serviceAmbient(uint32_t nowMs) {
+    // Ambient motion is deliberately idle-only: a full-screen gesture must
+    // never interrupt listening, lip sync, an error, or a server-specified
+    // transient expression. Storage is abundant; bus time is the scarce part.
+    if (state_.state() != CompanionState::Idle || state_.expression() != Expression::Neutral ||
+        audio_.playing() || audio_.capturing()) {
+        if (static_cast<int32_t>(nowMs - nextAmbientMs_) >= 0) {
+            nextAmbientMs_ = nowMs + random(appcfg::kAmbientGestureMinMs,
+                                            appcfg::kAmbientGestureMaxMs);
+        }
+        return;
+    }
+
+    if (!nextAmbientMs_) {
+        nextAmbientMs_ = nowMs + random(appcfg::kAmbientGestureMinMs,
+                                        appcfg::kAmbientGestureMaxMs);
+        return;
+    }
+    if (static_cast<int32_t>(nowMs - nextAmbientMs_) < 0) return;
+
+    // Weighted toward subtle motion, with occasional comic poses. The source
+    // frames and the transition order live in the character recipe; missing
+    // clips on an older pack simply become a no-op in DisplayTask.
+    const uint8_t pick = static_cast<uint8_t>(random(10));
+    Expression expression = Expression::SoftSmile;
+    Gesture gesture = Gesture::Nod;
+    uint32_t holdMs = 1300;
+
+    switch (pick) {
+        case 0:
+        case 1:
+            expression = Expression::SoftSmile;
+            gesture = Gesture::Nod;
+            holdMs = 1300;
+            break;
+        case 2:
+            expression = Expression::Curious;
+            gesture = Gesture::TiltLeft;
+            holdMs = 1600;
+            break;
+        case 3:
+            expression = Expression::Curious;
+            gesture = Gesture::TiltRight;
+            holdMs = 1600;
+            break;
+        case 4:
+            expression = Expression::Proud;
+            gesture = Gesture::Lean;
+            holdMs = 1400;
+            break;
+        case 5:
+            expression = Expression::Peace;
+            gesture = Gesture::LookAround;
+            holdMs = 1700;
+            break;
+        case 6:
+            expression = Expression::Cozy;
+            gesture = Gesture::IdleMoment;
+            holdMs = 1900;
+            break;
+        case 7:
+            expression = Expression::Mischievous;
+            gesture = Gesture::Shake;
+            holdMs = 1300;
+            break;
+        case 8:
+            expression = Expression::NodYes;
+            gesture = Gesture::Nod;
+            holdMs = 1200;
+            break;
+        default:
+            expression = Expression::Cheerful;
+            gesture = Gesture::Cheer;
+            holdMs = 1500;
+            break;
+    }
+
+    state_.setExpressionOverride(expression, holdMs, nowMs);
+    director_.triggerGesture(gesture);
+    nextAmbientMs_ = nowMs + random(appcfg::kAmbientGestureMinMs,
+                                    appcfg::kAmbientGestureMaxMs);
+}
+
 void App::loop() {
     // A file transfer owns the SPI bus and the serial port; everything else
     // waits rather than fighting it.
@@ -233,11 +330,13 @@ void App::loop() {
         speechEndPending_ = false;
         audio_.requestIdle();
         state_.handle(AppEvent(AppEventType::SpeechEnd), now);
+        if (random(100) < 35) director_.triggerGesture(Gesture::Nod);
     }
 
     state_.setWifiOnline(network_.wifiConnected());
     state_.setServerOnline(network_.serverConnected());
     state_.update(now);
+    serviceAmbient(now);
 
     // Once the pack is known, hand its sway length to the director so the body
     // loop matches the artwork rather than a compile-time guess.

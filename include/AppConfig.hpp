@@ -33,6 +33,10 @@ constexpr uint32_t kLcdBytesPerSec = 4200000;
 // Never let one tick monopolise the bus for longer than this.
 constexpr uint32_t kMaxTickBusMs = 26;
 
+// Full-screen gesture clips are intentionally slower than the 30 Hz tile loop:
+// a 320x240 RGB565 frame is 150 KiB and SD/LCD share the same SPI bus.
+constexpr uint16_t kGestureMaxFps = 5;
+
 // ----------------------------------------------------------------- cache ---
 // RAM budget for decoded tiles (eyes / mouth). Kept well under what the heap
 // can spare at boot: the Wi-Fi stack has not started yet at that point and
@@ -60,6 +64,10 @@ constexpr uint32_t kSwayPeriodMs = 4200;   // idle breathing cycle
 constexpr uint8_t  kSwayFrames = 8;
 constexpr uint32_t kIdleToSleepyMs = 180000;
 constexpr uint32_t kSleepyToSleepMs = 300000;
+// Idle one-shots keep the companion lively without constantly repainting the
+// full screen. Each choice returns to the normal 30 Hz eye/mouth renderer.
+constexpr uint32_t kAmbientGestureMinMs = 7000;
+constexpr uint32_t kAmbientGestureMaxMs = 17000;
 
 // ----------------------------------------------------------------- audio ---
 constexpr uint32_t kAudioSampleRate = 16000;

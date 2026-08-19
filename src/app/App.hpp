@@ -23,6 +23,7 @@ private:
     void handleEvent(const AppEvent& event, uint32_t nowMs);
     void serviceAudioUplink();
     void serviceButtons(uint32_t nowMs);
+    void serviceAmbient(uint32_t nowMs);
     void maybeProvision();
     void factoryReset();
 
@@ -43,6 +44,7 @@ private:
     bool muted_ = false;
     bool debug_ = false;
     bool speechEndPending_ = false;
+    uint32_t nextAmbientMs_ = 0;
     uint32_t lastTelemetryMs_ = 0;
     uint32_t lastStatePushMs_ = 0;
     CompanionState lastReportedState_ = CompanionState::Count;

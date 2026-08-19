@@ -31,7 +31,8 @@ inline uint8_t statePriority(CompanionState s) {
 }
 
 // ---------------------------------------------------------------------------
-// Expressions. The order matches the artwork sheet and the asset manifest.
+// Expressions. The first ten values are kept stable for compatibility with
+// the original Claude Code pack; new Kizuna expressions append to the enum.
 // ---------------------------------------------------------------------------
 enum class Expression : uint8_t {
     Neutral = 0,
@@ -44,6 +45,29 @@ enum class Expression : uint8_t {
     Sleepy,
     Playful,
     Error,
+    SoftSmile,
+    Laughing,
+    Surprised,
+    Determined,
+    Proud,
+    Embarrassed,
+    Sad,
+    Shy,
+    Pout,
+    Curious,
+    Relieved,
+    Sorry,
+    Mischievous,
+    Peace,
+    SleepyHalf,
+    Yawning,
+    Focused,
+    Starry,
+    Skeptical,
+    Startled,
+    Cozy,
+    NodYes,
+    Cheerful,
     Count,
 };
 
@@ -51,17 +75,40 @@ constexpr uint8_t kExpressionCount = static_cast<uint8_t>(Expression::Count);
 
 inline const char* expressionName(Expression e) {
     switch (e) {
-        case Expression::Neutral:   return "neutral";
-        case Expression::Happy:     return "happy";
-        case Expression::Excited:   return "excited";
-        case Expression::Thinking:  return "thinking";
-        case Expression::Listening: return "listening";
-        case Expression::Speaking:  return "speaking";
-        case Expression::Confused:  return "confused";
-        case Expression::Sleepy:    return "sleepy";
-        case Expression::Playful:   return "playful";
-        case Expression::Error:     return "error";
-        default:                    return "neutral";
+        case Expression::Neutral:      return "neutral";
+        case Expression::Happy:        return "happy";
+        case Expression::Excited:      return "excited";
+        case Expression::Thinking:     return "thinking";
+        case Expression::Listening:    return "listening";
+        case Expression::Speaking:     return "speaking";
+        case Expression::Confused:     return "confused";
+        case Expression::Sleepy:       return "sleepy";
+        case Expression::Playful:      return "playful";
+        case Expression::Error:        return "error";
+        case Expression::SoftSmile:    return "soft_smile";
+        case Expression::Laughing:     return "laughing";
+        case Expression::Surprised:    return "surprised";
+        case Expression::Determined:   return "determined";
+        case Expression::Proud:        return "proud";
+        case Expression::Embarrassed:  return "embarrassed";
+        case Expression::Sad:          return "sad";
+        case Expression::Shy:          return "shy";
+        case Expression::Pout:         return "pout";
+        case Expression::Curious:      return "curious";
+        case Expression::Relieved:     return "relieved";
+        case Expression::Sorry:        return "sorry";
+        case Expression::Mischievous:  return "mischievous";
+        case Expression::Peace:        return "peace";
+        case Expression::SleepyHalf:   return "sleepy_half";
+        case Expression::Yawning:      return "yawning";
+        case Expression::Focused:      return "focused";
+        case Expression::Starry:       return "starry";
+        case Expression::Skeptical:    return "skeptical";
+        case Expression::Startled:     return "startled";
+        case Expression::Cozy:         return "cozy";
+        case Expression::NodYes:       return "nod_yes";
+        case Expression::Cheerful:     return "cheerful";
+        default:                       return "neutral";
     }
 }
 
@@ -75,6 +122,42 @@ inline const char* stateName(CompanionState s) {
         case CompanionState::Sleep:     return "SLEEP";
         case CompanionState::Error:     return "ERROR";
         default:                        return "?";
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Full-screen gesture clips. A token accompanies the enum in FaceFrame so the
+// same gesture can be requested repeatedly without manufacturing fake states.
+// Names intentionally match recipe/manifest clip keys.
+// ---------------------------------------------------------------------------
+enum class Gesture : uint8_t {
+    None = 0,
+    Nod,
+    Shake,
+    TiltLeft,
+    TiltRight,
+    Lean,
+    LookAround,
+    IdleMoment,
+    Explain,
+    Cheer,
+    SleepPose,
+    Count,
+};
+
+inline const char* gestureName(Gesture g) {
+    switch (g) {
+        case Gesture::Nod:        return "nod";
+        case Gesture::Shake:      return "shake";
+        case Gesture::TiltLeft:   return "tilt_left";
+        case Gesture::TiltRight:  return "tilt_right";
+        case Gesture::Lean:       return "lean";
+        case Gesture::LookAround: return "look_around";
+        case Gesture::IdleMoment: return "idle_moment";
+        case Gesture::Explain:    return "explain";
+        case Gesture::Cheer:      return "cheer";
+        case Gesture::SleepPose:  return "sleep_pose";
+        default:                  return "";
     }
 }
 
@@ -145,6 +228,8 @@ struct FaceFrame {
     uint8_t swayFrame = 0;     // index into the pre-rendered body sway clip
     int8_t gazeX = 0;          // -4..4 px pupil offset
     int8_t gazeY = 0;
+    Gesture gesture = Gesture::None;
+    uint16_t gestureToken = 0; // changes for every one-shot gesture request
     uint8_t batteryPercent = 0;
     bool charging = false;
     bool wifiOnline = false;

@@ -162,7 +162,10 @@ void DisplayTask::bootSequence() {
     // boot clip costs storage rather than RAM.
     const uint16_t bootFrames = pack_.clipFrameCount("boot");
     if (bootFrames) {
-        const uint32_t frameMs = 1000 / 12;
+        uint16_t fps = pack_.clipFps("boot");
+        if (!fps) fps = 5;
+        fps = min<uint16_t>(fps, appcfg::kGestureMaxFps);
+        const uint32_t frameMs = 1000 / fps;
         for (uint16_t i = 0; i < bootFrames; ++i) {
             const uint32_t t0 = millis();
             renderer_.drawClipFrame("boot", i);
@@ -173,6 +176,56 @@ void DisplayTask::bootSequence() {
 
     renderer_.requestBase(Expression::Neutral);
     drawnExpression_ = Expression::Neutral;
+}
+
+bool DisplayTask::playGesture(Gesture gesture) {
+    const char* name = gestureName(gesture);
+    if (!name || !*name || !pack_.hasClip(name)) return false;
+
+    const uint16_t frames = pack_.clipFrameCount(name);
+    if (!frames) return false;
+
+    uint16_t fps = pack_.clipFps(name);
+    if (!fps) fps = appcfg::kGestureMaxFps;
+    fps = max<uint16_t>(1, min<uint16_t>(fps, appcfg::kGestureMaxFps));
+    const uint32_t frameMs = 1000UL / fps;
+
+    // Full-screen gesture frames are deliberately capped: SD and LCD share one
+    // SPI bus. The eye/mouth tiles continue at 30 Hz outside this short clip;
+    // trying to stream a 320x240 RGB565 movie at 12 Hz would only create jitter.
+    const CompanionState startState = current_.state;
+    for (uint16_t i = 0; i < frames; ++i) {
+        if (pauseRequested_ || uxQueueMessagesWaiting(commandQueue_)) break;
+
+        // Do not let a comic idle clip hide a real interaction. Frames arrive
+        // through a one-deep mailbox, so sampling it here gives PTT/speech and
+        // wake/sleep transitions a bounded interruption latency (one gesture
+        // frame, at most 200 ms with the 5 fps cap).
+        FaceFrame incoming;
+        if (xQueueReceive(frameQueue_, &incoming, 0) == pdTRUE) {
+            current_ = incoming;
+            if (current_.state != startState) break;
+            if (current_.gestureToken != drawnGestureToken_) {
+                drawnGestureToken_ = current_.gestureToken;
+                break;
+            }
+        }
+
+        const uint32_t t0 = millis();
+        bytesWindow_ += renderer_.drawClipFrame(name, i);
+        const uint32_t spent = millis() - t0;
+        if (spent < frameMs) vTaskDelay(pdMS_TO_TICKS(frameMs - spent));
+    }
+
+    // A clip covers the whole screen. Force the normal layered renderer to
+    // rebuild its baseline and tiles before it resumes.
+    drawnExpression_ = Expression::Count;
+    drawnSway_ = 0xFF;
+    drawnEyeSlot_ = 0xFF;
+    drawnViseme_ = 0xFF;
+    renderer_.requestBase(current_.expression);
+    renderer_.markOverlayDirty();
+    return true;
 }
 
 void DisplayTask::handleCommands() {
@@ -225,6 +278,13 @@ void DisplayTask::renderProcedural(uint32_t nowMs) {
 void DisplayTask::renderTick(uint32_t nowMs) {
     budget_.beginTick();
     size_t moved = 0;
+
+    // Gesture requests are edge-triggered by token, not by enum value. This
+    // allows e.g. two nods in a row without a dummy "none" frame between them.
+    if (current_.gestureToken != drawnGestureToken_) {
+        drawnGestureToken_ = current_.gestureToken;
+        if (current_.gesture != Gesture::None && playGesture(current_.gesture)) return;
+    }
 
     if (current_.expression != drawnExpression_ && !renderer_.basePending()) {
         renderer_.requestBase(current_.expression);

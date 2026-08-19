@@ -22,6 +22,7 @@ public:
         Count,
     };
     static constexpr uint8_t kLayerCount = static_cast<uint8_t>(Layer::Count);
+    static constexpr uint8_t kMaxClips = 20;
 
     // rootDir is the pack directory, e.g. "/companion/packs/m5girl".
     bool load(const char* rootDir);
@@ -55,11 +56,13 @@ public:
     // Reads a whole frame. Used to fill the RAM tile cache.
     bool readFrame(Expression e, Layer l, uint16_t frame, uint8_t* dst, size_t capacity);
 
-    // Optional full-screen clips such as the boot animation.
+    // Optional full-screen clips such as boot and one-shot character gestures.
+    // Packer fps hints are read from the .m5a header so the recipe owns timing.
     bool hasClip(const char* name) const;
     bool readClipBand(const char* name, uint16_t frame, uint16_t rowStart, uint16_t rows,
                       uint8_t* dst, uint16_t& outWidth);
     uint16_t clipFrameCount(const char* name);
+    uint16_t clipFps(const char* name);
     // Path of the largest clip, used for the boot-time throughput benchmark.
     const char* benchmarkPath() const { return benchPath_.c_str(); }
 
@@ -72,8 +75,14 @@ private:
         bool valid = false;
     };
 
+    struct NamedClip {
+        String name;
+        String path;
+    };
+
     OpenFile* acquire(const String& path);
     const String& clipPath(Expression e, Layer l) const;
+    const String* namedClipPath(const char* name) const;
 
     bool ready_ = false;
     String root_;
@@ -85,7 +94,8 @@ private:
     uint8_t visemeFrames_ = 1;
     Rect rect_[kLayerCount];
     String path_[kExpressionCount][kLayerCount];
-    String bootClip_;
+    NamedClip clips_[kMaxClips];
+    uint8_t clipCount_ = 0;
     String benchPath_;
     OpenFile open_[appcfg::kOpenFileCacheSlots];
     uint32_t useCounter_ = 0;
