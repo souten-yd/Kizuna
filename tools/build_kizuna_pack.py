@@ -55,7 +55,7 @@ class Recipe:
     eye_span: int
     eye_rect: tuple[int, int, int, int]
     mouth_rect: tuple[int, int, int, int]
-    sheets: dict[str, str]
+    sheets: dict[str, object]
     eye_slots: list[list]
     visemes: list[list]
     expressions: dict
@@ -139,7 +139,7 @@ def find_anchor(cell: Image.Image) -> Anchor:
     r, g, b = a[:, :, 0], a[:, :, 1], a[:, :, 2]
     skin = (r > 195) & (r - g > 18) & (r - g < 70) & (g - b > 5) & (g - b < 45) & (b > 140)
 
-    # The face is always in the upper 78% of a cell.  Removing the bottom keeps
+    # The face is always in the upper 78% of a cell. Removing the bottom keeps
     # bare legs or hands from winning on full/upper-body gesture artwork.
     skin[int(cell.height * 0.78):, :] = False
     blob = _largest_blob(skin)
@@ -150,7 +150,7 @@ def find_anchor(cell: Image.Image) -> Anchor:
     fh = max(8.0, float(y1 - y0 + 1))
 
     # On this design the eye line sits at ~43% of the visible skin oval and the
-    # inter-eye distance is ~60% of its width.  Only the centre is needed for
+    # inter-eye distance is ~60% of its width. Only the centre is needed for
     # registration; actual eye artwork remains untouched.
     eye_center = ((x0 + x1) * 0.5, y0 + fh * 0.43)
     return Anchor((x0, y0, x1, y1), eye_center, fw)
@@ -266,12 +266,26 @@ class CellLibrary:
     def _load(self, key: str) -> None:
         if key in self.cells:
             return
-        path = self.source_dir / self.recipe.sheets[key]
+        spec = self.recipe.sheets[key]
+        if isinstance(spec, str):
+            filename, atlas_grid, atlas_tile = spec, None, None
+        else:
+            filename = spec["file"]
+            atlas_grid = tuple(spec.get("grid", ()))
+            atlas_tile = tuple(spec.get("tile", ()))
+        path = self.source_dir / filename
         if not path.exists():
             raise SystemExit(f"sheet not found: {path}")
         image = Image.open(path).convert("RGB")
+        if atlas_grid and atlas_tile:
+            gx, gy = atlas_grid
+            tx, ty = atlas_tile
+            if image.width % gx or image.height % gy or not (0 <= tx < gx and 0 <= ty < gy):
+                raise SystemExit(f"{path.name}: bad atlas geometry for {key}")
+            aw, ah = image.width // gx, image.height // gy
+            image = image.crop((tx * aw, ty * ah, (tx + 1) * aw, (ty + 1) * ah))
         if image.width % GRID or image.height % GRID:
-            raise SystemExit(f"{path.name}: dimensions must divide evenly into 4x4")
+            raise SystemExit(f"{path.name}/{key}: dimensions must divide evenly into 4x4")
         cw, ch = image.width // GRID, image.height // GRID
         cells, anchors = [], []
         for row in range(GRID):
