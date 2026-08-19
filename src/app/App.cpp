@@ -137,6 +137,7 @@ void App::handleEvent(const AppEvent& event, uint32_t nowMs) {
             break;
 
         case AppEventType::SpeechBegin:
+            audio_.beginStream();
             speechEndPending_ = false;
             audio_.requestPlayback();
             break;
@@ -144,6 +145,7 @@ void App::handleEvent(const AppEvent& event, uint32_t nowMs) {
         case AppEventType::SpeechEnd:
             // Hold the SPEAKING pose until the jitter buffer has actually
             // drained, otherwise the mouth stops before the voice does.
+            audio_.endStream();
             speechEndPending_ = true;
             return;
 

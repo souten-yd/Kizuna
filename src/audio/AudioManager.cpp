@@ -266,7 +266,16 @@ void AudioManager::serviceCapture() {
 void AudioManager::servicePlayback() {
     const UBaseType_t waiting = uxQueueMessagesWaiting(spkQueue_);
     if (!prerolled_) {
-        if (waiting < appcfg::kPlaybackPrerollChunks) {
+        // Waiting for a full buffer is right in the middle of an utterance and
+        // wrong at the end of one: the last chunks of a sentence are fewer
+        // than the preroll, so holding out for more strands them. They then
+        // play glued to the front of the next sentence, which is what a
+        // clipped, hurried reply actually is.
+        if (!streamEnded_ && waiting < appcfg::kPlaybackPrerollChunks) {
+            vTaskDelay(pdMS_TO_TICKS(4));
+            return;
+        }
+        if (!waiting) {
             vTaskDelay(pdMS_TO_TICKS(4));
             return;
         }

@@ -33,6 +33,12 @@ public:
     bool playing() const { return mode_ == Mode::Playback; }
     bool playbackDrained() const;
 
+    // The server has said the utterance is over. Everything still queued is
+    // all there will ever be, so it must be played rather than waited on: the
+    // jitter buffer's job ends here.
+    void endStream() { streamEnded_ = true; }
+    void beginStream() { streamEnded_ = false; }
+
     // Producer side: network -> speaker.
     bool pushPlayback(const uint8_t* data, size_t bytes);
     // Consumer side: mic -> network. Returns false when nothing is pending.
@@ -84,6 +90,7 @@ private:
     int32_t dcBias_ = 0;      // tracked, not assumed: the electret does not sit at 2048
     bool dcPrimed_ = false;
     bool prerolled_ = false;
+    volatile bool streamEnded_ = false;
 
     Chunk capture_[2];
     uint8_t captureIdx_ = 0;
