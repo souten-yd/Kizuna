@@ -2,6 +2,9 @@
 
 #include <math.h>
 
+#include <driver/adc.h>
+#include <esp_timer.h>
+
 #include <M5Unified.h>
 
 bool AudioManager::begin() {
@@ -11,7 +14,6 @@ bool AudioManager::begin() {
 
     M5.Speaker.setVolume(appcfg::kSpeakerVolume);
     M5.Speaker.end();
-    M5.Mic.end();
 
     // Core 0 keeps audio away from the display task's SPI bursts on core 1.
     return xTaskCreatePinnedToCore(taskThunk, "audio", 4096, this, 4, &task_, 0) == pdPASS;
@@ -90,8 +92,7 @@ void AudioManager::applyMode(Mode target) {
 
     switch (mode_) {
         case Mode::Capture:
-            M5.Mic.end();
-            captureWarm_ = false;
+                    captureWarm_ = false;
             break;
         case Mode::Playback:
             M5.Speaker.stop();
@@ -108,17 +109,7 @@ void AudioManager::applyMode(Mode target) {
     switch (target) {
         case Mode::Capture:
             xQueueReset(micQueue_);
-            configureMic();
-            M5.Mic.begin();
-            {
-                const auto& got = M5.Mic.config();
-                log_i("mic: enabled=%d pin=%d adc=%d rate=%u mag=%u over=%u "
-                      "i2s=%d dma=%ux%u",
-                      (int)M5.Mic.isEnabled(), got.pin_data_in, (int)got.use_adc,
-                      (unsigned)got.sample_rate, (unsigned)got.magnification,
-                      (unsigned)got.over_sampling, (int)got.i2s_port,
-                      (unsigned)got.dma_buf_len, (unsigned)got.dma_buf_count);
-            }
+            beginAdcMic();
             captureIdx_ = 0;
             captureWarm_ = false;
             break;
@@ -134,129 +125,98 @@ void AudioManager::applyMode(Mode target) {
 }
 
 void AudioManager::selfTest(uint16_t chunks, uint8_t overSampling, uint16_t dmaLen,
-                            uint8_t dmaCount, uint8_t magnification) {
+                            uint8_t dmaCount, uint8_t gainShift) {
+    (void)overSampling;
+    (void)dmaLen;
+    (void)dmaCount;
     requestIdle();
     for (int i = 0; i < 50 && mode_ != Mode::Idle; ++i) vTaskDelay(pdMS_TO_TICKS(10));
 
-    M5.Speaker.end();
-    configureMic();
-    {
-        auto cfg = M5.Mic.config();
-        if (overSampling) cfg.over_sampling = overSampling;
-        if (dmaLen) cfg.dma_buf_len = dmaLen;
-        if (dmaCount) cfg.dma_buf_count = dmaCount;
-        if (magnification) cfg.magnification = magnification;
-        M5.Mic.config(cfg);
-    }
-    if (!M5.Mic.begin()) {
-        Serial.println("err mic begin failed");
-        return;
-    }
-    const auto& cfg = M5.Mic.config();
-    Serial.printf("mic pin=%d adc=%d rate=%u mag=%u over=%u i2s=%d dma=%ux%u\n",
-                  cfg.pin_data_in, (int)cfg.use_adc, (unsigned)cfg.sample_rate,
-                  (unsigned)cfg.magnification, (unsigned)cfg.over_sampling,
-                  (int)cfg.i2s_port, (unsigned)cfg.dma_buf_len,
-                  (unsigned)cfg.dma_buf_count);
+    beginAdcMic();
+    const uint8_t gain = gainShift ? gainShift : appcfg::kMicGainShift;
+    Serial.printf("mic adc1_ch6 (GPIO34) rate=%u gain_shift=%u\n",
+                  (unsigned)appcfg::kMicSampleRate, (unsigned)gain);
 
-    static int16_t buf[2][appcfg::kAudioSamplesPerChunk];
-    uint8_t idx = 0;
+    static int16_t buf[appcfg::kMicSamplesPerChunk];
     uint32_t worst = 0;
     int32_t peak = 0;
     int64_t energy = 0;
     const uint32_t started = millis();
     for (uint16_t i = 0; i < chunks; ++i) {
         const uint32_t t0 = micros();
-        if (!M5.Mic.record(buf[idx], appcfg::kAudioSamplesPerChunk,
-                           appcfg::kAudioSampleRate)) {
-            Serial.printf("err record refused at chunk %u\n", (unsigned)i);
-            break;
-        }
+        captureAdc(buf, appcfg::kMicSamplesPerChunk, gain);
         const uint32_t spent = micros() - t0;
         if (spent > worst) worst = spent;
-        idx ^= 1;
-        for (size_t n = 0; n < appcfg::kAudioSamplesPerChunk; ++n) {
-            const int32_t v = buf[idx][n];
+        for (size_t n = 0; n < appcfg::kMicSamplesPerChunk; ++n) {
+            const int32_t v = buf[n];
             if (v > peak) peak = v;
             if (-v > peak) peak = -v;
             energy += static_cast<int64_t>(v) * v;
         }
     }
     const uint32_t elapsed = millis() - started;
-    M5.Mic.end();
 
-    const uint32_t samples = static_cast<uint32_t>(chunks) * appcfg::kAudioSamplesPerChunk;
-    Serial.printf("{\"chunks\":%u,\"ms\":%u,\"effective_hz\":%u,\"worst_record_us\":%u,"
-                  "\"peak\":%d,\"rms\":%u}\n",
+    const uint32_t samples = static_cast<uint32_t>(chunks) * appcfg::kMicSamplesPerChunk;
+    Serial.printf("{\"chunks\":%u,\"ms\":%u,\"effective_hz\":%u,\"worst_chunk_us\":%u,"
+                  "\"peak\":%d,\"rms\":%u,\"dc\":%d}\n",
                   (unsigned)chunks, (unsigned)elapsed,
                   elapsed ? (unsigned)((uint64_t)samples * 1000 / elapsed) : 0,
                   (unsigned)worst, (int)peak,
-                  (unsigned)(samples ? (uint32_t)sqrt((double)energy / samples) : 0));
+                  (unsigned)(samples ? (uint32_t)sqrt((double)energy / samples) : 0),
+                  (int)(dcBias_ >> 8));
 }
 
-void AudioManager::configureMic() {
-    // M5Unified has no microphone configuration for board_M5Stack, because the
-    // Core on its own does not have one. The M5GO's base board does: an analog
-    // electret on GPIO34, read through the ADC. Calling M5.Mic.begin() without
-    // setting this up starts a driver pointed at pins that are not connected,
-    // which produces a couple of chunks a second instead of fifty and no
-    // sound - and it fails silently, because record() keeps returning true.
-    auto cfg = M5.Mic.config();
-    cfg.pin_data_in = GPIO_NUM_34;
-    cfg.use_adc = true;
-    // ADC capture on the ESP32 is only available on I2S port 0, which is also
-    // where the speaker's DAC lives. That is why this path is half duplex.
-    cfg.i2s_port = I2S_NUM_0;
-    cfg.sample_rate = appcfg::kAudioSampleRate;
-    cfg.stereo = false;
-    cfg.magnification = appcfg::kMicMagnification;
-    cfg.over_sampling = 2;
-    cfg.noise_filter_level = 0;
-    M5.Mic.config(cfg);
+void AudioManager::beginAdcMic() {
+    // GPIO34 is ADC1 channel 6. 11 dB of attenuation puts the full 0-3.3 V
+    // range in reach, which is what the electret's bias sits in the middle of.
+    adc1_config_width(ADC_WIDTH_BIT_12);
+    adc1_config_channel_atten(ADC1_CHANNEL_6, ADC_ATTEN_DB_11);
+    dcPrimed_ = false;
+    dcBias_ = 0;
+}
+
+size_t AudioManager::captureAdc(int16_t* out, size_t count, uint8_t gainShift) {
+    const int64_t period = 1000000 / appcfg::kMicSampleRate;
+    int64_t next = esp_timer_get_time();
+    for (size_t i = 0; i < count; ++i) {
+        next += period;
+        const int32_t raw = adc1_get_raw(ADC1_CHANNEL_6);
+
+        // Track the bias rather than assuming half scale. The electret on this
+        // base board sits nearer 3000 than 2048, and a wrong centre is a DC
+        // step that the speaker reproduces as a thump.
+        if (!dcPrimed_) {
+            dcBias_ = raw << 8;
+            dcPrimed_ = true;
+        } else {
+            dcBias_ += ((raw << 8) - dcBias_) >> 9;   // ~40 ms at 12 kHz
+        }
+
+        int32_t v = (raw - (dcBias_ >> 8)) << gainShift;
+        if (v > INT16_MAX) v = INT16_MAX;
+        if (v < INT16_MIN) v = INT16_MIN;
+        out[i] = static_cast<int16_t>(v);
+
+        // Spin rather than delay: the wait is 83 us and the tick is 1 ms. This
+        // task is pinned to core 0 and the display owns core 1, so the cost is
+        // one idle core during an utterance and nothing on the animation.
+        while (esp_timer_get_time() < next) {
+        }
+    }
+    return count;
 }
 
 void AudioManager::serviceCapture() {
-    if (!M5.Mic.isEnabled()) {
-        if (!micDisabledLogged_) {
-            micDisabledLogged_ = true;
-            log_w("capture: microphone reports disabled");
-        }
-        return;
-    }
-    micDisabledLogged_ = false;
-
     Chunk& target = capture_[captureIdx_];
-    target.samples = appcfg::kAudioSamplesPerChunk;
     const uint32_t t0 = micros();
-    const bool queued = M5.Mic.record(target.data, appcfg::kAudioSamplesPerChunk,
-                                      appcfg::kAudioSampleRate);
+    target.samples = captureAdc(target.data, appcfg::kMicSamplesPerChunk,
+                                appcfg::kMicGainShift);
     recordMicros_ += micros() - t0;
-    if (!queued) {
-        // The mic and the speaker share one I2S port on this board, so a
-        // record that keeps refusing usually means the handover did not
-        // complete rather than that the microphone is busy.
-        if (++recordFailures_ % 200 == 1) {
-            log_w("capture: record() refused %u times (produced %u chunks)",
-                  (unsigned)recordFailures_, (unsigned)producedChunks_);
-        }
-        vTaskDelay(1);
-        return;
-    }
-    recordFailures_ = 0;
+    captureIdx_ ^= 1;
 
-    // record() fills asynchronously, so the buffer that is safe to read is the
-    // one handed to the driver on the previous call.
-    const uint8_t readyIdx = captureIdx_ ^ 1;
-    captureIdx_ = readyIdx;
-    if (!captureWarm_) {
-        captureWarm_ = true;
-        return;
-    }
-
-    Chunk& ready = capture_[readyIdx];
-    lipLevel_ = levelFrom(ready.data, ready.samples);
+    lipLevel_ = levelFrom(target.data, target.samples);
     ++producedChunks_;
-    if (xQueueSend(micQueue_, &ready, 0) != pdTRUE) ++dropped_;
+    if (xQueueSend(micQueue_, &target, 0) != pdTRUE) ++dropped_;
 }
 
 void AudioManager::servicePlayback() {

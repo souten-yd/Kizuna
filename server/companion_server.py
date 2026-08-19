@@ -65,6 +65,7 @@ class Session:
         self.name = "m5go"
         self.utterance = bytearray()
         self.listening = False
+        self.capture_rate = be.SAMPLE_RATE
         self.history: list[dict] = []
         self.speaking_task: asyncio.Task | None = None
 
@@ -119,6 +120,11 @@ class Session:
 
         elif kind == "listen.begin":
             self.utterance.clear()
+            # The microphone does not have to run at the rate the speaker does.
+            # On the M5GO it cannot: reading the ADC through I2S gives a
+            # fraction of the configured rate, so the firmware reads it
+            # directly at 12 kHz and says so here.
+            self.capture_rate = int(msg.get("rate") or be.SAMPLE_RATE)
             self.listening = True
             if self.speaking_task and not self.speaking_task.done():
                 # The user pressed the button while we were talking. They win.
@@ -145,7 +151,9 @@ class Session:
 
     # ---------------------------------------------------------- the pipeline --
     async def handle_utterance(self, audio: bytes):
-        seconds = len(audio) / (be.SAMPLE_RATE * be.SAMPLE_WIDTH)
+        seconds = len(audio) / (self.capture_rate * be.SAMPLE_WIDTH)
+        if self.capture_rate != be.SAMPLE_RATE:
+            audio = be.resample_linear(audio, self.capture_rate, be.SAMPLE_RATE)
         log.info("utterance: %.2f s (%d bytes)", seconds, len(audio))
         if seconds < 0.25:
             # Send the state back too. Without it the device sits in LISTENING

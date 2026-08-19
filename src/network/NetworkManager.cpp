@@ -181,7 +181,13 @@ void NetworkManager::sendListenBegin() {
     if (!serverConnected()) return;
     uplinkChunks_ = 0;
     uplinkFailures_ = 0;
-    emitText(String("{\"type\":\"listen.begin\",\"format\":\"pcm_s16le\",\"rate\":16000}"));
+    // The rate the microphone actually runs at, which is not the rate the
+    // speaker does: the ADC path tops out below 16 kHz. The server resamples.
+    char frame[96];
+    snprintf(frame, sizeof(frame),
+             "{\"type\":\"listen.begin\",\"format\":\"pcm_s16le\",\"rate\":%u}",
+             (unsigned)appcfg::kMicSampleRate);
+    emitText(String(frame));
 }
 
 void NetworkManager::sendListenEnd(bool cancelled) {

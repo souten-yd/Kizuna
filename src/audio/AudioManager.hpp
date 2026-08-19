@@ -17,7 +17,9 @@ class AudioManager {
 public:
     struct Chunk {
         uint16_t samples = 0;
-        int16_t data[appcfg::kAudioSamplesPerChunk];
+        // Sized for the microphone, which runs slower than playback.
+        int16_t data[appcfg::kMicSamplesPerChunk > appcfg::kAudioSamplesPerChunk
+                     ? appcfg::kMicSamplesPerChunk : appcfg::kAudioSamplesPerChunk];
     };
 
     bool begin();
@@ -53,7 +55,8 @@ private:
     void run();
     void applyMode(Mode target);
     void serviceCapture();
-    void configureMic();
+    void beginAdcMic();
+    size_t captureAdc(int16_t* out, size_t count, uint8_t gainShift);
     void servicePlayback();
     static uint8_t levelFrom(const int16_t* samples, size_t count);
 
@@ -69,7 +72,8 @@ private:
     uint32_t producedChunks_ = 0;
     uint32_t recordFailures_ = 0;
     uint32_t recordMicros_ = 0;
-    bool micDisabledLogged_ = false;
+    int32_t dcBias_ = 0;      // tracked, not assumed: the electret does not sit at 2048
+    bool dcPrimed_ = false;
     bool prerolled_ = false;
 
     Chunk capture_[2];
