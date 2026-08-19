@@ -110,6 +110,32 @@ def check_eye_registration(arr: np.ndarray, rel: str, report: Report):
         report.warn(f"{rel}: eyes about {span:.0f} px apart, expected "
                     f"~{INTEROCULAR}")
 
+    if "wink" not in Path(rel).stem:
+        check_eye_symmetry(alpha, rel, report)
+
+
+def check_eye_symmetry(alpha: np.ndarray, rel: str, report: Report):
+    """Both eyes should be in the same state unless the part is a wink.
+
+    A blink stage that closes one eye further than the other reads as a wink,
+    and blink fires several times a minute - so the character appears to wink
+    at the viewer constantly. Mirroring one half onto the other and comparing
+    coverage catches it without needing to know what the eye looks like.
+    """
+    left = alpha[:, :FACE_CENTER_X] > 60
+    right = np.fliplr(alpha[:, FACE_CENTER_X:]) > 60
+    n = min(left.shape[1], right.shape[1])
+    # Compare the halves inward from the centre line, where the eyes are.
+    la = int(left[:, left.shape[1] - n:].sum())
+    ra = int(right[:, right.shape[1] - n:].sum())
+    if la < 50 or ra < 50:
+        return
+    ratio = min(la, ra) / max(la, ra)
+    if ratio < 0.6:
+        report.error(f"{rel}: the two eyes differ in coverage by "
+                     f"{100 * (1 - ratio):.0f}% - one is more closed than the "
+                     f"other, which reads as a wink")
+
 
 def check_base(arr: np.ndarray, rel: str, report: Report):
     """A base face must not already have eyes drawn on it."""
