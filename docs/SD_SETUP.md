@@ -64,20 +64,44 @@ python tools/pack_assets.py --out build/sd
 Edit it on the card and reboot; the values are copied into NVS on boot, so the
 card is not needed afterwards.
 
+The existing WebSocket bridge remains the default:
+
 ```json
 {
   "wifi_ssid": "your-network",
   "wifi_password": "…",
+  "voice_transport": "bridge",
   "server_host": "192.168.1.10",
   "server_port": 8765,
   "server_path": "/m5companion",
   "device_name": "M5GO-Companion",
-  "pack": "claudecode",
+  "pack": "kizuna",
   "volume": 150,
   "brightness": 160,
   "led_brightness": 40
 }
 ```
+
+For direct QnapAssistant 0.4 streaming, keep the bridge fields if you want to
+switch back later and add the QNAP fields:
+
+```json
+{
+  "wifi_ssid": "your-network",
+  "wifi_password": "…",
+  "voice_transport": "qnap_stream",
+  "qnap_host": "192.168.68.57",
+  "qnap_port": 11435,
+  "qnap_path": "/v1/voice/chat/stream?profile=m5go",
+  "device_name": "M5GO-Companion",
+  "pack": "kizuna",
+  "volume": 150
+}
+```
+
+Direct mode uploads 16 kHz PCM in bounded HTTP chunks and consumes QNAP's
+multipart WAV response incrementally, so the M5GO never needs to hold the full
+utterance or reply in RAM. See [QNAP_DIRECT_STREAM.md](QNAP_DIRECT_STREAM.md).
 
 Leaving `wifi_ssid` empty is fine - the companion runs offline. Holding B+C
 through power-on opens a setup access point instead.

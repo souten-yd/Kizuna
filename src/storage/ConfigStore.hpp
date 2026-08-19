@@ -7,9 +7,21 @@
 struct DeviceConfig {
     String wifiSsid;
     String wifiPassword;
+
+    // Legacy/current companion bridge. This remains the default so existing
+    // installations keep using the WebSocket server unchanged.
     String serverHost;
     uint16_t serverPort = appcfg::kDefaultServerPort;
     String serverPath = appcfg::kDefaultServerPath;
+
+    // Voice transport selector:
+    //   bridge      -> existing WebSocket companion_server
+    //   qnap_stream -> direct QnapAssistant HTTP chunked upload + multipart audio
+    String voiceTransport = "bridge";
+    String qnapHost;
+    uint16_t qnapPort = 11435;
+    String qnapPath = "/v1/voice/chat/stream?profile=m5go";
+
     String deviceName = "M5GO-Companion";
     String packName = "kizuna";
     uint8_t volume = appcfg::kSpeakerVolume;
@@ -21,7 +33,10 @@ struct DeviceConfig {
     bool packServerEnabled = false;
 
     bool hasWifi() const { return !wifiSsid.isEmpty(); }
-    bool hasServer() const { return !serverHost.isEmpty(); }
+    bool usesQnapStream() const { return voiceTransport.equalsIgnoreCase("qnap_stream"); }
+    bool hasServer() const {
+        return usesQnapStream() ? !qnapHost.isEmpty() : !serverHost.isEmpty();
+    }
 };
 
 class ConfigStore {
