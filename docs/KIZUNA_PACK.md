@@ -1,24 +1,14 @@
 # Kizuna character pack
 
-`kizuna` is the default M5GO companion pack. It is generated from the existing
-high-resolution 4x4 animation sources under `assets/source/` plus the recipe in
+`kizuna` is the default M5GO companion artwork pack. It is generated from the
+clean 4x4 source sheets under `assets/source/` and the recipe in
 `assets/characters/kizuna.json`.
-
-The supplied design/reference boards are already represented in this repository
-by packer-ready sheets (expression, micro-emotion, eye, mouth, nod, shake, tilt,
-head-pose and idle sets). The Kizuna recipe reuses those source files instead of
-checking in another multi-megabyte copy of the same character artwork. This also
-keeps the current alignment/flood-fill pipeline and its hardware-tested source
-quality intact.
 
 ## What is in the pack
 
-- 33 named expression intents, including neutral, soft/happy/laughing,
-  surprised, embarrassed, shy, pout, curious, relieved, apologetic,
-  mischievous, peace, sleepy/yawning, focused, starry, skeptical, startled and
-  cozy variants. Some of the subtle intent names currently share the closest
-  supplied artwork; their names are independent so a future sheet can replace
-  any one of them without changing firmware or protocol.
+- 33 named expressions, including neutral, soft/happy/laughing, surprised,
+  embarrassed, shy, pout, curious, relieved, apologetic, mischievous, peace,
+  sleepy/yawning, focused, starry, skeptical, startled and cozy variants.
 - 12 eye slots: five gaze directions, progressive blink stages, wide eyes and
   sleepy half/closed states.
 - 8 visemes for quiet-to-wide speech plus rounded-O and closed/open smile mouths.
@@ -29,20 +19,8 @@ quality intact.
 ## Build
 
 ```bash
-python tools/validate_kizuna_sources.py
-
-python tools/pack_assets.py \
-  --character assets/characters/kizuna.json \
-  --name kizuna \
-  --out build/sd
-
-python tools/push_sd.py
-```
-
-Or use the convenience wrapper:
-
-```bash
 python tools/build_kizuna_pack.py --out build/sd
+python tools/push_sd.py
 ```
 
 The generated directory is:
@@ -61,6 +39,25 @@ already saved `claudecode` in NVS keep that explicit choice; switch the pack
 from the web pack manager or set `"pack": "kizuna"` in
 `/companion/config/device.json`.
 
+### Replaceable backgrounds
+
+Kizuna keeps its source sheets on a pure-white background and composites the
+scene while building the pack. The ESP32 therefore never has to alpha-blend a
+large character at runtime. To make a room/home/desk variant, build the same
+artwork against another image and give it a different pack name:
+
+```bash
+python tools/build_kizuna_pack.py \
+  --background assets/backgrounds/home.jpg \
+  --background-theme light \
+  --name kizuna-home \
+  --out build/sd
+```
+
+Store several variants side by side on the 32 GB card and switch them with the
+existing web pack manager. This changes the background without regenerating the
+character source art or adding runtime decoding/compositing load.
+
 ## Animation policy
 
 The 32 GB card is intentionally treated as plentiful storage, but storage size
@@ -72,13 +69,11 @@ uses two animation lanes:
    change for blink, gaze and lip sync. These remain responsive during speech.
 2. **Comic one-shot lane** — full-screen illustrated gestures play only while
    idle or on explicit physical reactions. Playback is capped to 5 fps by the
-   firmware, then the layered 30 Hz renderer immediately restores the current
-   expression.
+   firmware, can be interrupted by a state change such as PTT/speech, then the
+   layered 30 Hz renderer immediately restores the current expression.
 
 This avoids trying to brute-force full-screen video through the shared SPI bus
-while still allowing many stored poses and short comic reactions. A 32 GB card
-therefore helps most by letting the pack contain *many* expressions/one-shots;
-it does not remove the instantaneous SPI bandwidth limit.
+while still allowing many stored poses and short comic reactions.
 
 ## Idle loop / transitions
 
@@ -95,33 +90,25 @@ motion and occasionally use a stronger comic reaction:
 - nod-yes -> nod -> neutral
 - cheerful -> cheer -> neutral
 
-Physical/device events can also request a one-shot: shake -> shake clip, pickup
--> tilt, server connection -> nod, sleep request -> sleepy pose. A short nod can
-also be chosen after speech completes.
-
 Blink order remains `open -> half -> almost closed -> closed -> almost closed
 -> half -> soft lower -> open`. Sleepy expressions use the sleepy-half and
-sleepy-closed slots on a slower independent clock. Speaking keeps the existing
-fast-open/slow-close viseme smoothing, with smile visemes selected for happy
-expressions.
+sleepy-closed slots on a slower independent clock. Speaking still uses the
+existing fast-open/slow-close viseme smoothing, with smile visemes selected for
+happy expressions.
 
 ## Source-sheet mapping
 
-| Existing source | Kizuna use |
+| Sheet | Runtime use |
 |---|---|
-| `expression_sheet_v2.png` | core expressive faces |
-| `emotion_micro.png` | neutral/listening/thinking and subtle emotion variants |
-| `eye_direction_set.png` | center/left/right/up/down gaze |
-| `eye_blink_set_a.png` | soft-lower and progressive blink stages |
-| `eye_blink_set_b.png` | wide and sleepy eye states |
-| `mouth_set_a.png` | 8 viseme slots |
-| `nod_vertical_set.png` | nod one-shot |
-| `head_shake_set.png` | shake one-shot |
-| `tilt_lean_set.png` | tilt and lean one-shots |
-| `head_pose8_set.png` | look-around / explain-style one-shots |
-| `idle_motion_set.png` | idle, cheer and sleep-style one-shots |
+| `kizuna_expression_a.webp` | expressions 01–16 |
+| `kizuna_expression_b.webp` | expressions 17–32 plus cheerful variant |
+| `kizuna_eyes.webp` | fixed 12 eye slots |
+| `kizuna_mouth.webp` | 8 viseme slots |
+| `kizuna_head_motion.webp` | nod/look/tilt/lean/idle gesture clips |
+| `kizuna_gestures.webp` | explain/cheer/sleep-pose clips |
+| `kizuna_fullbody.webp` | visual pose reference only; not consumed by the current packer |
 
-These are the same high-resolution source assets the original character pack
-already trusts. The Kizuna recipe only changes semantic routing, loop ordering
-and runtime behaviour, so future replacement artwork can be dropped in by
-editing the recipe rather than rewriting the renderer.
+The sheets referenced by `kizuna.json` are normalized to an exact 4x4 grid,
+so the dedicated Kizuna builder does not need hard-coded per-sheet pixel
+offsets. The full-body reference is kept separately for future authored
+transition clips.
