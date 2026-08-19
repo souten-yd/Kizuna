@@ -152,10 +152,11 @@ void AudioManager::servicePlayback() {
     // Keep one chunk playing and one queued behind it: that is what M5Unified
     // needs to produce a seam-free stream.
     while (M5.Speaker.isPlaying(0) < 2) {
-        Chunk chunk;
-        if (xQueueReceive(spkQueue_, &chunk, 0) != pdTRUE) break;
-        lipLevel_ = levelFrom(chunk.data, chunk.samples);
-        M5.Speaker.playRaw(chunk.data, chunk.samples, appcfg::kAudioSampleRate, false, 1, 0, false);
+        Chunk& slot = playback_[playbackIdx_];
+        if (xQueueReceive(spkQueue_, &slot, 0) != pdTRUE) break;
+        playbackIdx_ = (playbackIdx_ + 1) % kPlaybackSlots;
+        lipLevel_ = levelFrom(slot.data, slot.samples);
+        M5.Speaker.playRaw(slot.data, slot.samples, appcfg::kAudioSampleRate, false, 1, 0, false);
     }
 
     if (!waiting && !M5.Speaker.isPlaying()) {

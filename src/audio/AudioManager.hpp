@@ -64,5 +64,15 @@ private:
 
     Chunk capture_[2];
     uint8_t captureIdx_ = 0;
+
+    // Playback buffers outlive the call that hands them over. M5Unified's
+    // playRaw is asynchronous: it records the pointer and returns, and the
+    // mixer task reads from it afterwards. A buffer on the caller's stack
+    // is therefore overwritten while it is still being played, which sounds
+    // like grit rather than like anything obviously broken. Four slots
+    // against the two the mixer queues leaves a full round of margin.
+    static constexpr uint8_t kPlaybackSlots = 4;
+    Chunk playback_[kPlaybackSlots];
+    uint8_t playbackIdx_ = 0;
     bool captureWarm_ = false;
 };
