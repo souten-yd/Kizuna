@@ -202,6 +202,11 @@ class Session:
             await self.send_json({"type": "state", "state": "idle"})
 
     async def say(self, sentence: str):
+        # A small model often repeats the tag mid-reply. It is a stage
+        # direction, not something to read out loud.
+        sentence = EXPRESSION_TAG.sub("", sentence).strip()
+        if not sentence:
+            return
         try:
             pcm = await self.app.tts.synthesize(sentence)
         except Exception:
@@ -245,11 +250,15 @@ def build_backends(args):
     else:
         stt = be.NullStt()
 
+    system = be.system_prompt(args.language)
     if args.llm == "claude":
-        llm = be.ClaudeLlm(model=args.model, effort=args.effort)
+        llm = be.ClaudeLlm(model=args.model, effort=args.effort, system=system)
     elif args.llm == "ollama":
         llm = be.OllamaLlm(model=args.ollama_model, host=args.ollama_host,
-                           think=args.ollama_think)
+                           think=args.ollama_think, system=system)
+    elif args.llm == "openai":
+        llm = be.OpenAiLlm(model=args.openai_model, base_url=args.openai_base_url,
+                           api_key=args.openai_key, system=system)
     else:
         llm = be.EchoLlm()
 
@@ -299,13 +308,18 @@ def main():
     ap.add_argument("--whisper-compute", default="int8")
     ap.add_argument("--language", default=None, help="e.g. ja, en; auto-detect when unset")
 
-    ap.add_argument("--llm", choices=["claude", "ollama", "echo"], default="claude")
+    ap.add_argument("--llm", choices=["claude", "ollama", "openai", "echo"], default="claude")
     ap.add_argument("--model", default="claude-opus-5", help="Claude model id")
     ap.add_argument("--effort", choices=["low", "medium", "high"], default="low")
     ap.add_argument("--ollama-model", default="qwen3:0.6b")
     ap.add_argument("--ollama-host", default="http://127.0.0.1:11434")
     ap.add_argument("--ollama-think", action="store_true",
                     help="let a reasoning model think first; costs seconds of latency")
+    ap.add_argument("--openai-model", default="Qwen3-0.6B",
+                    help="model id for --llm openai; llama.cpp ignores it")
+    ap.add_argument("--openai-base-url", default="http://127.0.0.1:11435/v1",
+                    help="any OpenAI-compatible endpoint, e.g. a QnapAssistant NAS")
+    ap.add_argument("--openai-key", default="", help="sent as a bearer token when set")
 
     ap.add_argument("--tts", choices=["piper", "espeak", "tone", "none"], default="espeak",
                     help="tone synthesises beeps - useful for testing the audio "

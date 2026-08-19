@@ -233,6 +233,23 @@ If you did not understand the user, use [[confused]] and say so plainly \
 rather than guessing."""
 
 
+LANGUAGE_NAMES = {"ja": "Japanese", "en": "English", "zh": "Chinese",
+                  "ko": "Korean", "fr": "French", "de": "German", "es": "Spanish"}
+
+
+def system_prompt(language: str | None = None) -> str:
+    """The base prompt, plus a language instruction when one is pinned.
+
+    A small local model drifts back into English after a turn or two whatever
+    the user speaks, so the instruction is worth its tokens.
+    """
+    if not language:
+        return SYSTEM_PROMPT
+    name = LANGUAGE_NAMES.get(language, language)
+    return (f"{SYSTEM_PROMPT}\n\nAlways reply in {name}, however the user writes. "
+            f"The expression tag stays in English exactly as listed above.")
+
+
 class OllamaLlm:
     """A model running on the local network via Ollama.
 
@@ -305,3 +322,59 @@ class ClaudeLlm:
         ) as stream:
             async for text in stream.text_stream:
                 yield text
+
+
+class OpenAiLlm:
+    """Any OpenAI-compatible `/v1/chat/completions` endpoint.
+
+    Written for QnapAssistant - a llama.cpp server on a QNAP NAS that loads the
+    model on demand and unloads it after five idle minutes - but nothing here
+    is specific to it. The first request after an idle period pays for the
+    model load, which is why the timeout is generous compared to Ollama's.
+    """
+
+    def __init__(self, model: str = "Qwen3-0.6B",
+                 base_url: str = "http://127.0.0.1:11435/v1",
+                 api_key: str = "", system: str = "",
+                 max_tokens: int = 200, timeout: float = 180.0):
+        import httpx
+
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        self._client = httpx.AsyncClient(base_url=base_url.rstrip("/"),
+                                         headers=headers, timeout=timeout)
+        self._model = model
+        self._system = system or SYSTEM_PROMPT
+        self._max_tokens = max_tokens
+
+    async def stream(self, history: list[dict]) -> AsyncIterator[str]:
+        payload = {
+            "model": self._model,
+            "messages": [{"role": "system", "content": self._system}] + history,
+            "stream": True,
+            "temperature": 0.7,
+            "max_tokens": self._max_tokens,
+        }
+        async with self._client.stream("POST", "/chat/completions", json=payload) as response:
+            if response.status_code >= 400:
+                body = (await response.aread()).decode("utf-8", "replace")
+                raise RuntimeError(f"{response.status_code} from LLM: {body[:200]}")
+            async for line in response.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                choices = obj.get("choices") or []
+                if not choices:
+                    continue
+                # `reasoning_content` is where llama.cpp puts a thinking
+                # model's deliberation. A companion speaks the answer only.
+                chunk = choices[0].get("delta", {}).get("content")
+                if chunk:
+                    yield chunk
