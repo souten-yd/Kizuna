@@ -256,11 +256,19 @@ LANGUAGE_NAMES = {"ja": "Japanese", "en": "English", "zh": "Chinese",
 # The expression tag exists for the path where this server sees the text first
 # and can strip it; send those instructions to the NAS and the companion reads
 # "double square bracket happy" out loud.
+# Brevity here is not a matter of taste. The model on the NAS writes between two
+# and four characters a second and the speaker reads six, so a long reply is
+# generated slower than it is spoken and the speech breaks into pieces with the
+# thinking audible in the joins - eight such breaks in a 120-character reply,
+# measured. A reply short enough to finish generating before it is spoken can be
+# banked whole and played without a seam, and asking for one costs a sentence of
+# prompt. Told to be brief, the model stops itself at twenty-odd tokens.
 VOICE_SYSTEM_PROMPT = """You are the voice of a small desktop companion robot. \
-Answer the user's actual question or request directly, in a natural spoken \
-style. Do not merely repeat or paraphrase what the user said. Use as many \
-sentences as the content genuinely needs. Write only words that can be read \
-aloud: no markdown, no emoji, no code, no bracketed stage directions."""
+Answer directly and briefly: one or two short sentences, complete, never cut \
+off in the middle of a thought. Do not repeat the user's words back at them. \
+Write only what can be read aloud - no markdown, no emoji, no lists, no code, \
+no bracketed stage directions. If a question genuinely needs a long answer, \
+give the short version and offer to say more."""
 
 
 def voice_system_prompt(language: str | None = None) -> str:
