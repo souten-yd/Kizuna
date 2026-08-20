@@ -11,11 +11,27 @@ changed** - see [CODEX_MASTER_PROMPT.md](CODEX_MASTER_PROMPT.md).
 | 01 | `master.png` | — the resting pose: front, eyes open, mouth closed | — | **done** |
 | 02 | `eye_closed.png` | the eyes are fully closed | eyes | **done** |
 | 03 | `eye_half.png` | the eyes are half closed, lids halfway down | eyes | **done** |
-| 04 | `eye_left.png` | the eyes look to the character's left — the irises move, the eye shape does not | eyes | pending |
-| 05 | `eye_right.png` | the eyes look to the character's right — same rule | eyes | pending |
-| 06 | `mouth_small.png` | the mouth is slightly open, as at the start of a word | mouth | pending |
-| 07 | `mouth_medium.png` | the mouth is open about halfway | mouth | pending |
-| 08 | `mouth_wide.png` | the mouth is wide open | mouth | pending |
+| 04 | `eye_left.png` | the eyes look to the character's left — the irises move, the eye shape does not | eyes | **done** |
+| 05 | `eye_right.png` | the eyes look to the character's right — same rule | eyes | **done** |
+| 06 | `mouth_small.png` | the mouth is slightly open, as at the start of a word | mouth | redrawn — ask again |
+| 07 | `mouth_medium.png` | the mouth is open about halfway | mouth | redrawn — ask again |
+| 08 | `mouth_wide.png` | the mouth is wide open | mouth | redrawn — ask again |
+
+The four eye variants came back as genuine edits: the difference sits on the
+eyes and the hair and jacket are untouched. **125 x 135 on screen, 25 fps.**
+
+The three mouth variants did not. Their difference covers the head outline,
+the jacket and the shoulders as well as the mouth, which puts the rectangle at
+204 x 188 and the rate at 11 fps. Since the same generator, the same master
+and the same sentence produced clean edits for the eyes, this is worth asking
+for again rather than accepting - and the re-request should name the eyes
+among the things that must not change, since those are the part it has already
+shown it can leave alone.
+
+One thing that does *not* help: taking the rectangle from `mouth_small` against
+`mouth_wide` rather than against the master. Each variant carries its own
+regeneration drift, so comparing two of them compounds the drift instead of
+cancelling it - measured, 204 x 188 becomes 223 x 205.
 
 Two rectangles, each taken from the extreme of its feature, because the
 extreme bounds everything in between:
