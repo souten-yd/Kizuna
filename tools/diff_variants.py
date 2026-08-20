@@ -37,6 +37,56 @@ def load(path: Path) -> np.ndarray:
     return np.asarray(Image.open(path).convert("RGB"), dtype=np.int16)
 
 
+def feature_rect(base: np.ndarray, variant: np.ndarray, grid: int, keep: float = 0.90):
+    """The rectangle worth pushing, rather than the one containing every change.
+
+    A generator asked to edit will often redraw the hair as a side effect: the
+    strand positions move by a pixel and the bounding box of "anything that
+    differs" becomes the whole canvas. That box is not what the device needs.
+    The device only ever pushes this rectangle, so the variant's hair is never
+    drawn and its differences never appear.
+
+    What matters is where the *strong* differences are - the feature that was
+    actually asked for - and whether the edge of that rectangle lands somewhere
+    the two pictures agree, which is what makes the paste invisible.
+    """
+    mag = np.abs(base - variant).max(axis=2).astype(np.float64)
+    # The top percentile rather than a fixed threshold. Redrawn hair puts a
+    # one-pixel edge everywhere, and every one of those edges clears 40 - so a
+    # threshold finds the whole head. The feature that was actually asked for
+    # is a *lot* more different than the incidental churn, and a percentile
+    # separates the two without needing to know which feature it is.
+    cut = max(40.0, float(np.percentile(mag, 99.0)))
+    strong = mag >= cut
+    if strong.sum() < 32:
+        return None, 0.0, 0.0
+
+    def band(vec):
+        c = np.cumsum(vec)
+        total = c[-1]
+        return (int(np.searchsorted(c, total * (1 - keep) / 2)),
+                int(np.searchsorted(c, total * (1 + keep) / 2)))
+
+    x0, x1 = band(strong.sum(axis=0))
+    y0, y1 = band(strong.sum(axis=1))
+    x0 = (x0 // grid) * grid
+    y0 = (y0 // grid) * grid
+    x1 = min(base.shape[1], ((x1 // grid) + 1) * grid)
+    y1 = min(base.shape[0], ((y1 // grid) + 1) * grid)
+
+    fill = float(strong[y0:y1, x0:x1].mean())
+    # The seam: how far apart the two pictures are just outside the rectangle.
+    # If they agree there, pasting is invisible however different the rest is.
+    pad = max(grid, 3)
+    ring = np.zeros(mag.shape, bool)
+    ring[max(0, y0 - pad):y0, max(0, x0 - pad):x1 + pad] = True
+    ring[y1:y1 + pad, max(0, x0 - pad):x1 + pad] = True
+    ring[max(0, y0 - pad):y1 + pad, max(0, x0 - pad):x0] = True
+    ring[max(0, y0 - pad):y1 + pad, x1:x1 + pad] = True
+    seam = float(mag[ring].mean()) if ring.any() else 0.0
+    return (x0, y0, x1, y1), fill, seam
+
+
 def changed_rect(base: np.ndarray, variant: np.ndarray, threshold: int, grid: int):
     diff = np.abs(base - variant).max(axis=2) > threshold
     if not diff.any():
@@ -73,7 +123,8 @@ def main() -> int:
     sx, sy = a.screen[0] / w, a.screen[1] / h
     print(f"base {base_path.name}  {w}x{h} -> {a.screen[0]}x{a.screen[1]} on screen\n")
 
-    print(f"{'variant':<22}{'changed rect (canvas)':>26}{'on screen':>14}{'bytes':>9}{'fill':>7}")
+    print(f"{'variant':<22}{'feature rect (canvas)':>26}{'on screen':>14}"
+          f"{'bytes':>9}{'fill':>7}{'seam':>7}")
     out = {}
     for path in sorted(a.directory.glob("*.png")):
         if path.name == a.base:
@@ -93,7 +144,7 @@ def main() -> int:
             variant = np.asarray(
                 Image.fromarray(variant.astype(np.uint8)).resize((w, h), Image.LANCZOS),
                 dtype=np.int16)
-        rect, fill = changed_rect(base, variant, a.threshold, a.grid)
+        rect, fill, seam = feature_rect(base, variant, a.grid)
         if rect is None:
             print(f"{path.name:<22}  identical to the base")
             continue
@@ -102,13 +153,14 @@ def main() -> int:
         sh = round((y1 - y0) * sy)
         by = sw * sh * 2
         flag = ""
-        if (x1 - x0) > w * 0.6 or (y1 - y0) > h * 0.6:
-            flag = "  <- spans the canvas; the whole picture was redrawn"
-        elif fill < 0.08:
-            flag = "  <- sparse; something moved outside the feature"
+        if (x1 - x0) > w * 0.5 or (y1 - y0) > h * 0.5:
+            flag = "  <- the change is not local; nothing small to push"
+        elif seam > 20:
+            flag = "  <- the edge of the rectangle does not match; the paste would show"
         print(f"{path.name:<22}{f'{x0},{y0} {x1-x0}x{y1-y0}':>26}"
-              f"{f'{sw}x{sh}':>14}{by:>9}{fill:>6.0%}{flag}")
-        out[path.stem] = {"rect": rect, "screen": [sw, sh], "bytes": by, "fill": fill}
+              f"{f'{sw}x{sh}':>14}{by:>9}{fill:>6.0%}{seam:>7.1f}{flag}")
+        out[path.stem] = {"rect": rect, "screen": [sw, sh], "bytes": by,
+                          "fill": fill, "seam": seam}
 
     if out:
         budget = 845070
