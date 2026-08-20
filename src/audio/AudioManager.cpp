@@ -215,8 +215,25 @@ void AudioManager::beginAdcMic() {
     // range in reach, which is what the electret's bias sits in the middle of.
     adc1_config_width(ADC_WIDTH_BIT_12);
     adc1_config_channel_atten(ADC1_CHANNEL_6, ADC_ATTEN_DB_11);
-    dcPrimed_ = false;
-    dcBias_ = 0;
+
+    // The bias is where the electret idles, which is a property of the part and
+    // not of the utterance, so it is measured once and kept. Re-priming it per
+    // utterance took the very first sample as the centre; land that sample on a
+    // peak - which is likely, because people start talking as they press - and
+    // the centre is wrong by the amplitude of the speech, sixteen times the
+    // error reaches the output, and it clips until the filter drags the bias
+    // back. That takes about 43 ms at 12 kHz, which is a syllable. Transcripts
+    // came back missing their first syllable: "konnichiwa" as "chiwa".
+    if (!dcPrimed_) {
+        int32_t sum = 0;
+        constexpr int kPrimeSamples = 128;      // ~11 ms, and averaged
+        for (int i = 0; i < kPrimeSamples; ++i) {
+            sum += adc1_get_raw(ADC1_CHANNEL_6);
+            esp_rom_delay_us(80);
+        }
+        dcBias_ = (sum / kPrimeSamples) << 8;
+        dcPrimed_ = true;
+    }
 }
 
 size_t AudioManager::captureAdc(int16_t* out, size_t count, uint8_t gainShift) {

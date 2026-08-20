@@ -63,10 +63,20 @@ def offset(ref_img: Image.Image, mov_img: Image.Image,
 
 
 def align(ref_img: Image.Image, mov_img: Image.Image, **kw) -> tuple[Image.Image, int, int]:
-    """mov shifted onto ref. Edges wrap, which only ever touches the backdrop."""
+    """mov shifted onto ref, vacating its edges rather than wrapping them.
+
+    Rolling was wrong. The character reaches the bottom edge of the canvas, so a
+    downward shift wrapped the jacket round to the top and it arrived on the
+    device as a bright line across the first row of the panel.
+    """
     dx, dy, _ = offset(ref_img, mov_img, **kw)
     if (dx, dy) == (0, 0):
         return mov_img, 0, 0
-    a = np.asarray(mov_img.convert("RGBA"))
-    a = np.roll(np.roll(a, dy, axis=0), dx, axis=1)
-    return Image.fromarray(a), dx, dy
+    src = np.asarray(mov_img.convert("RGBA"))
+    out = np.zeros_like(src)          # transparent, so the backdrop shows
+    h, w = src.shape[:2]
+    ys, yd = (0, dy) if dy >= 0 else (-dy, 0)
+    xs, xd = (0, dx) if dx >= 0 else (-dx, 0)
+    rows, cols = h - abs(dy), w - abs(dx)
+    out[yd:yd + rows, xd:xd + cols] = src[ys:ys + rows, xs:xs + cols]
+    return Image.fromarray(out), dx, dy
