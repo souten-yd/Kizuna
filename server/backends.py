@@ -239,6 +239,25 @@ LANGUAGE_NAMES = {"ja": "Japanese", "en": "English", "zh": "Chinese",
                   "ko": "Korean", "fr": "French", "de": "German", "es": "Spanish"}
 
 
+# The NAS synthesises the reply itself, so anything the model writes is spoken.
+# The expression tag exists for the path where this server sees the text first
+# and can strip it; send those instructions to the NAS and the companion reads
+# "double square bracket happy" out loud.
+VOICE_SYSTEM_PROMPT = """You are the voice of a small desktop companion robot. \
+Answer the user's actual question or request directly, in a natural spoken \
+style. Do not merely repeat or paraphrase what the user said. Use as many \
+sentences as the content genuinely needs. Write only words that can be read \
+aloud: no markdown, no emoji, no code, no bracketed stage directions."""
+
+
+def voice_system_prompt(language: str | None = None) -> str:
+    """The prompt for the endpoint that speaks without showing us the words."""
+    if not language:
+        return VOICE_SYSTEM_PROMPT
+    name = LANGUAGE_NAMES.get(language, language)
+    return f"{VOICE_SYSTEM_PROMPT}\n\nAlways reply in {name}, however the user writes."
+
+
 def system_prompt(language: str | None = None) -> str:
     if not language:
         return SYSTEM_PROMPT
