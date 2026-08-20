@@ -180,10 +180,28 @@ eye rectangle's bottom edge runs across the cheek, where the two renders already
 agree and there was nothing to hide. The eyes fade on three sides and the mouth
 on three, each leaving the shared boundary hard.
 
-## Part 09 - the wink
+## Part 09 - the wink - NOT NEEDED
 
-Nothing delivered shuts one eye and leaves the other open, so this is the one
-picture still missing. Everything else for it exists: `include/AssetFormat.hpp`
+A wink needs no picture of its own, and the reason is worth keeping.
+
+The two eyes occupy separate columns of the eye rectangle - x 121..145 and
+x 169..197 - and between them, x 145..165, every eye picture agrees to within
+4 levels out of 255. They agree because eye_closed is a true edit of master
+rather than a re-render: measured offset 0, residual 1.10 where the re-rendered
+parts sit at 5. So the wink is master's left half joined to eye_closed's right
+half at x=157, and the join shows nothing, because there was never anything
+there to hide.
+
+This generalises past the wink. Any eye may hold any state independently of the
+other, from the pictures already delivered - one eye half-lidded while the other
+watches, a slow one-sided close, a wink held while the mouth talks. Five eye
+pictures give twenty-five pairings for the cost of the five.
+
+`splice()` in tools/build_variant_pack.py does the join; a slot names either one
+picture or a pair. The paragraphs below are what I wrote when I thought a
+drawing was needed, kept because the framing rules in it apply to any new part.
+
+### The request that turned out to be unnecessary Everything else for it exists: `include/AssetFormat.hpp`
 has `kEyeWink`, `include/AppTypes.hpp` has `EyeFrame::Wink`, DisplayTask maps
 between them, and CharacterDirector spends a wink on the Playful and
 Mischievous expressions and holds it 360 ms - long enough to read as deliberate

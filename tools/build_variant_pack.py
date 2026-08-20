@@ -46,19 +46,24 @@ MOUTH_RECT = (140, 119, 62, 33)
 
 # Firmware's fixed slot order.
 # eye_half has both lids lowered with the iris half hidden, which is the middle
-# of a blink and not, as I first read it at thumbnail size, a wink. It carries
-# the three intermediate stages. Nothing here is a wink: a wink needs one eye
-# shut and the other open, and no delivered picture does that.
+# of a blink and not, as I first read it at thumbnail size, a wink.
+#
+# A wink needs no picture of its own. The two eyes occupy separate columns -
+# x 121..145 and x 169..197 - with a gap between them where every eye picture
+# agrees to within 4 levels of 255, because eye_closed is a true edit of master
+# rather than a re-render. Splitting there and taking one eye from each picture
+# costs nothing and shows no seam, so a slot may name one picture or a pair as
+# (left half, right half) in screen terms.
+SPLIT_X = 157      # the nose bridge: where the eye pictures agree
+SPLIT_FEATHER = 4
+
 EYE_SLOTS = [
     ("open_center", "master"), ("open_left", "eye_left"), ("open_right", "eye_right"),
     ("open_up", "master"), ("open_down", "master"), ("soft_lower", "eye_half"),
     ("half", "eye_half"), ("almost_closed", "eye_half"), ("closed", "eye_closed"),
     ("wide", "master"), ("sleepy_half", "eye_half"), ("sleepy_closed", "eye_closed"),
-    # No delivered picture shuts one eye and leaves the other open, so the wink
-    # slot holds the open eyes until part 09 arrives. It is wired end to end
-    # already: the firmware has the slot and the director spends it on Playful
-    # and Mischievous, so the picture is the only thing missing.
-    ("wink", "master"),
+    # Her left eye shut, her right open.
+    ("wink", ("master", "eye_closed")),
 ]
 VISEMES = [
     ("rest", "master"), ("tiny", "mouth_small"), ("small", "mouth_small"),
@@ -84,6 +89,22 @@ def load(src: Path, name: str, ref: Image.Image | None = None):
         im, dx, dy = register.align(ref, im)
     flat = Image.alpha_composite(Image.new("RGBA", im.size, BACKDROP + (255,)), im)
     return flat.convert("RGB").resize(SCREEN, Image.LANCZOS), dx, dy
+
+
+def splice(left: Image.Image, right: Image.Image) -> Image.Image:
+    """One eye from each picture, joined at the bridge of the nose.
+
+    A wink is one eye shut and the other open, which is not a new drawing so
+    much as a new pairing of two that exist. It works because the join runs
+    through a column the eye pictures already agree on - the gap between the
+    eyes differs by about 4 levels of 255 - so nothing has to be hidden there.
+    """
+    a = np.asarray(left).astype(np.float32)
+    b = np.asarray(right).astype(np.float32)
+    w = a.shape[1]
+    ramp = np.clip((np.arange(w) - (SPLIT_X - SPLIT_FEATHER / 2)) / SPLIT_FEATHER, 0, 1)
+    m = ramp[None, :, None]
+    return Image.fromarray(np.clip(a * (1 - m) + b * m, 0, 255).astype(np.uint8))
 
 
 def cut(src: Image.Image, base: Image.Image, rect, feather: int,
@@ -140,10 +161,17 @@ def main() -> int:
 
     ref = Image.open(a.src / "master.png").convert("RGBA")
     frames, shifts = {}, {}
+    wanted = []
     for _, name in EYE_SLOTS + VISEMES + [(None, a.base)]:
+        wanted.extend(name if isinstance(name, tuple) else (name,))
+    for name in wanted:
         if name not in frames:
             frames[name], dx, dy = load(a.src, name, None if name == "master" else ref)
             shifts[name] = (dx, dy)
+
+    for _, name in EYE_SLOTS:
+        if isinstance(name, tuple):
+            frames[name] = splice(frames[name[0]], frames[name[1]])
 
     out = a.out
     out.mkdir(parents=True, exist_ok=True)
