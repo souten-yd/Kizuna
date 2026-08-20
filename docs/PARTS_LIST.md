@@ -89,3 +89,45 @@ be made from them, which is why 01 was drawn fresh.
 A body layer, so the hand stays at the ear while the face keeps blinking. See
 [POSE_AND_ANGLE_SPEC.md](POSE_AND_ANGLE_SPEC.md); the framing question there
 is settled but the artwork has not been asked for.
+
+## 2026-08-20 - what the delivered parts actually cost
+
+The verdict on 06-08 recorded above ("redrawn, re-request") was wrong, and the
+mistake is worth keeping because it is easy to repeat. A variant that differs
+from the master across the whole head is not thereby unusable. Only the feature
+rectangle is ever drawn, so a redraw outside it costs nothing. What the redraw
+does damage is the *automatic* rectangle, which grows to cover every difference
+it can find and so reported the mouth as 204x188 - the whole face.
+
+Telling the search where to look fixes it. `diff_variants.py --region X0 Y0 X1 Y1`
+confines the search to a box in screen pixels, and the mouth came back at 97x60.
+
+Final rectangles, both verified by compositing every state onto the master and
+looking at the result rather than at a seam score:
+
+| feature | rect (screen) | bytes/blit | ceiling |
+|---|---|---|---|
+| eyes  | (122,90) 72x23  |  3312 | 255 fps |
+| mouth | (117,115) 97x60 | 11640 |  73 fps |
+
+Against a bus carrying ~850 KB/s, neither is a constraint any more; the frame
+rate of the face is now set by whatever else is on the bus, not by the face.
+
+The seam score stayed high (11-17) for every mouth state and for eye_half /
+eye_left / eye_right, and every one of them composites cleanly. The score
+measures how much the variant differs just outside its rectangle, which for a
+redrawn variant is large by construction and says nothing about whether the
+join shows. Treat it as a hint about which parts to look at, never as a gate.
+
+### eye_half is a wink
+
+Part 02 arrived as one eye shut rather than both lids lowered, so it cannot
+serve as the middle of a blink. Cross-fading open and closed was tried in its
+place and the iris ghosts through as a translucent disc - a fade is not a lid
+coming down. The blink is two stages for now.
+
+**Part 09 - both eyes half-closed.** Same rules as 01-08: change only the
+eyelids, leave the eyes' position, the hair, the jacket and the framing alone.
+When it arrives, `soft_lower`, `half` and `sleepy_half` in
+`tools/build_variant_pack.py` take it and the blink softens with no code change.
+The wink has no firmware slot yet and is held aside rather than misused.

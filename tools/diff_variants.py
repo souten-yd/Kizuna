@@ -37,7 +37,8 @@ def load(path: Path) -> np.ndarray:
     return np.asarray(Image.open(path).convert("RGB"), dtype=np.int16)
 
 
-def feature_rect(base: np.ndarray, variant: np.ndarray, grid: int, keep: float = 0.90):
+def feature_rect(base: np.ndarray, variant: np.ndarray, grid: int, keep: float = 0.90,
+                 region=None):
     """The rectangle worth pushing, rather than the one containing every change.
 
     A generator asked to edit will often redraw the hair as a side effect: the
@@ -51,12 +52,20 @@ def feature_rect(base: np.ndarray, variant: np.ndarray, grid: int, keep: float =
     the two pictures agree, which is what makes the paste invisible.
     """
     mag = np.abs(base - variant).max(axis=2).astype(np.float64)
+    if region is not None:
+        rx0, ry0, rx1, ry1 = region
+        keep_mask = np.zeros(mag.shape, bool)
+        keep_mask[ry0:ry1, rx0:rx1] = True
+        mag = np.where(keep_mask, mag, 0.0)
     # The top percentile rather than a fixed threshold. Redrawn hair puts a
     # one-pixel edge everywhere, and every one of those edges clears 40 - so a
     # threshold finds the whole head. The feature that was actually asked for
     # is a *lot* more different than the incidental churn, and a percentile
     # separates the two without needing to know which feature it is.
-    cut = max(40.0, float(np.percentile(mag, 99.0)))
+    pool = mag[mag > 0] if region is not None else mag
+    if pool.size < 32:
+        return None, 0.0, 0.0
+    cut = max(40.0, float(np.percentile(pool, 97.0 if region is not None else 99.0)))
     strong = mag >= cut
     if strong.sum() < 32:
         return None, 0.0, 0.0
@@ -103,6 +112,14 @@ def changed_rect(base: np.ndarray, variant: np.ndarray, threshold: int, grid: in
     return (int(x0), int(y0), int(x1), int(y1)), float(inside.mean())
 
 
+def scale_region(region, sx, sy):
+    """A box given in screen pixels, in the canvas's own coordinates."""
+    if not region:
+        return None
+    x0, y0, x1, y1 = region
+    return (int(x0 / sx), int(y0 / sy), int(x1 / sx), int(y1 / sy))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -112,6 +129,15 @@ def main() -> int:
     ap.add_argument("--grid", type=int, default=GRID)
     ap.add_argument("--screen", type=int, nargs=2, default=(320, 240),
                     metavar=("W", "H"), help="what the canvas becomes on the device")
+    ap.add_argument("--region", nargs=4, type=int, metavar=("X0","Y0","X1","Y1"),
+                    help="look for the feature only inside this box, in screen "
+                         "pixels. A variant that was redrawn rather than edited "
+                         "differs everywhere, and the rectangle found without a "
+                         "hint is the whole head - but only the feature is ever "
+                         "drawn, so telling it where to look recovers a usable "
+                         "rectangle from a delivery that would otherwise be "
+                         "rejected. The mouth went from 204x188 to 109x80 this "
+                         "way, and from 11 fps to 48")
     ap.add_argument("--fixed-from", metavar="FILE",
                     help="derive one rectangle from this variant and clip every "
                          "other to it. The extremes of a feature bound its "
@@ -136,7 +162,7 @@ def main() -> int:
         if ref.shape != base.shape:
             ref = np.asarray(Image.fromarray(ref.astype(np.uint8))
                              .resize((w, h), Image.LANCZOS), dtype=np.int16)
-        fixed, _, _ = feature_rect(base, ref, a.grid)
+        fixed, _, _ = feature_rect(base, ref, a.grid, region=scale_region(a.region, sx, sy))
         if fixed is None:
             raise SystemExit(f"{a.fixed_from} does not differ from the base")
         fx0, fy0, fx1, fy1 = fixed
@@ -180,7 +206,8 @@ def main() -> int:
             out[path.stem] = {"held": held, "discarded_mean": float(outside.mean())}
             continue
 
-        rect, fill, seam = feature_rect(base, variant, a.grid)
+        rect, fill, seam = feature_rect(base, variant, a.grid,
+                                        region=scale_region(a.region, sx, sy))
         if rect is None:
             print(f"{path.name:<22}  identical to the base")
             continue
