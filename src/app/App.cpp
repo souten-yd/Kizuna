@@ -186,9 +186,18 @@ void App::handleEvent(const AppEvent& event, uint32_t nowMs) {
 
 void App::serviceAudioUplink() {
     if (!audio_.capturing()) return;
-    // Bounded drain: the animation loop must keep its slot even mid-utterance.
+    // Drain what is there. The old bound of four chunks a turn was justified by
+    // leaving room for the animation, but the animation has its own task on the
+    // other core - the bound was protecting nothing and costing speech. The
+    // microphone produces fifty chunks a second, so four a turn needs this loop
+    // to run twelve times a second come what may, and one slow websocket send
+    // is enough for it not to.
+    //
+    // The cap that remains is against the opposite failure: a queue that has
+    // somehow filled should not be emptied in one turn while everything else
+    // waits.
     AudioManager::Chunk chunk;
-    for (uint8_t i = 0; i < 4 && audio_.popCapture(chunk); ++i) {
+    for (uint8_t i = 0; i < appcfg::kMicQueueDepth && audio_.popCapture(chunk); ++i) {
         network_.sendAudio(chunk.data, chunk.samples);
     }
 }

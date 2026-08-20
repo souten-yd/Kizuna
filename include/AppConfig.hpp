@@ -86,7 +86,12 @@ constexpr uint32_t kAmbientGestureMaxMs = 17000;
 constexpr uint32_t kAudioSampleRate = 16000;
 constexpr size_t kAudioSamplesPerChunk = 320;   // 20 ms
 constexpr size_t kAudioBytesPerChunk = kAudioSamplesPerChunk * sizeof(int16_t);
-constexpr uint8_t kMicQueueDepth = 8;
+// 320 ms of microphone, against 160 ms before. The queue only has to cover the
+// worst pause between two turns of the loop that drains it, and a websocket
+// send that has to wait for the socket is exactly such a pause. Overflowing it
+// throws away speech: the device reported 1995 chunks dropped - forty seconds
+// of an utterance - on a link that was otherwise healthy.
+constexpr uint8_t kMicQueueDepth = 16;
 constexpr uint8_t kPlaybackQueueDepth = 24;     // ~480 ms jitter buffer
 constexpr uint8_t kPlaybackPrerollChunks = 4;   // ~80 ms before first output
 // The microphone is read from the ADC directly rather than through I2S.

@@ -1,4 +1,5 @@
 #include "SerialConsole.hpp"
+#include "ResetReason.hpp"
 
 #include <M5Unified.h>
 #include <SD.h>
@@ -225,12 +226,14 @@ void SerialConsole::cmdInfo() {
     Serial.printf(
         "{\"fw\":\"%s\",\"heap\":%u,\"min_heap\":%u,\"sd\":\"%s\",\"pack\":\"%s\","
         "\"fps\":%u.%u,\"sd_bps\":%u,\"budget_bps\":%u,\"drawn_bps\":%u,"
+        "\"reset\":\"%s\","
         "\"cache_slots\":%u,\"cache_hits\":%u,\"cache_misses\":%u,\"dropped\":%u,"
         "\"spk_dropped\":%u,\"mic_dropped\":%u,"
         "\"underruns\":%u,\"refused\":%u}\n",
         M5COMPANION_VERSION, ESP.getFreeHeap(), ESP.getMinFreeHeap(), stats.sdStatus,
         stats.packName, stats.fpsX10 / 10, stats.fpsX10 % 10, stats.sdBytesPerSec,
-        stats.budgetBytesPerSec, stats.drawnBytesPerSec, stats.cacheSlots,
+        stats.budgetBytesPerSec, stats.drawnBytesPerSec,
+        appdiag::resetReasonName(), stats.cacheSlots,
         stats.cacheHits, stats.cacheMisses, audio_ ? audio_->droppedChunks() : 0,
         audio_ ? audio_->droppedPlayback() : 0, audio_ ? audio_->droppedCapture() : 0,
         audio_ ? audio_->playbackUnderruns() : 0,

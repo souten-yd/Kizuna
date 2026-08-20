@@ -120,8 +120,15 @@ class Session:
         kind = msg.get("type", "")
         if kind == "hello":
             self.name = msg.get("name", "m5go")
-            log.info("hello from %s (fw %s, protocol %s)",
-                     self.name, msg.get("fw"), msg.get("protocol"))
+            reset = msg.get("reset", "")
+            log.info("hello from %s (fw %s, protocol %s%s)",
+                     self.name, msg.get("fw"), msg.get("protocol"),
+                     f", last reset: {reset}" if reset else "")
+            if reset in ("panic", "task_wdt", "int_wdt", "other_wdt", "brownout"):
+                # Not a fresh start someone asked for. Worth saying loudly,
+                # because from across the room a crash and a power cycle look
+                # exactly alike.
+                log.warning("the device came back from %s", reset)
             await self.set_expression("happy", 1200)
 
         elif kind == "listen.begin":
@@ -157,10 +164,15 @@ class Session:
 
     # ---------------------------------------------------------- the pipeline --
     async def handle_utterance(self, audio: bytes):
-        seconds = len(audio) / (self.capture_rate * be.SAMPLE_WIDTH)
+        captured = len(audio)
+        seconds = captured / (self.capture_rate * be.SAMPLE_WIDTH)
         if self.capture_rate != be.SAMPLE_RATE:
             audio = be.resample_linear(audio, self.capture_rate, be.SAMPLE_RATE)
-        log.info("utterance: %.2f s (%d bytes)", seconds, len(audio))
+        # Both counts, and which rate each is at. Logging the duration from
+        # before the conversion beside the byte count from after it reads as a
+        # rate mismatch that is not there, and costs an hour to disprove.
+        log.info("utterance: %.2f s (%d B @ %d Hz -> %d B @ %d Hz)",
+                 seconds, captured, self.capture_rate, len(audio), be.SAMPLE_RATE)
         if seconds < 0.25:
             # Send the state back too. Without it the device sits in LISTENING
             # for ever, because nothing else ever tells it to stop - which

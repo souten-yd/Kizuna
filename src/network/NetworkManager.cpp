@@ -1,4 +1,5 @@
 #include "NetworkManager.hpp"
+#include "ResetReason.hpp"
 
 #include <ArduinoJson.h>
 #include <WiFi.h>
@@ -170,6 +171,9 @@ void NetworkManager::sendHello() {
     doc["audio_rate"] = protocol::kAudioRate;
     doc["chunk_samples"] = appcfg::kAudioSamplesPerChunk;
     doc["ip"] = ip_;
+    // Why the last boot happened. The interesting failures are the ones with
+    // the cable out, where the serial console is not there to say.
+    doc["reset"] = appdiag::resetReasonName();
     String out;
     serializeJson(doc, out);
     const bool ok = wsConnected_ ? ws_.sendTXT(out) : true;

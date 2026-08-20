@@ -5,6 +5,7 @@
 #include <driver/adc.h>
 #include <soc/i2s_struct.h>
 #include <esp_timer.h>
+#include <esp_task_wdt.h>
 
 #include <M5Unified.h>
 
@@ -93,7 +94,8 @@ void AudioManager::applyMode(Mode target) {
 
     switch (mode_) {
         case Mode::Capture:
-                    captureWarm_ = false;
+            captureWarm_ = false;
+            releaseCore0();
             break;
         case Mode::Playback:
             M5.Speaker.stop();
@@ -113,6 +115,7 @@ void AudioManager::applyMode(Mode target) {
             beginAdcMic();
             captureIdx_ = 0;
             captureWarm_ = false;
+            claimCore0();
             break;
         case Mode::Playback:
             M5.Speaker.begin();
@@ -267,6 +270,30 @@ size_t AudioManager::captureAdc(int16_t* out, size_t count, uint8_t gainShift) {
     return count;
 }
 
+void AudioManager::claimCore0() {
+    // Reading the ADC by hand means spinning between samples: at 12 kHz the
+    // wait is 83 us and a tick is 1 ms, so there is no sleeping through it.
+    // That leaves core 0's idle task with nothing, and the idle task is what
+    // the watchdog watches - five seconds of held button and the device
+    // reboots mid-sentence. It did, reproducibly, and the log named IDLE0.
+    //
+    // The idle task is excused for as long as the capture runs, and this task
+    // takes its place under the watchdog: something still has to prove it is
+    // alive, and a capture loop that stops feeding is exactly the failure the
+    // watchdog is for.
+    if (wdtHeld_) return;
+    disableCore0WDT();
+    esp_task_wdt_add(nullptr);
+    wdtHeld_ = true;
+}
+
+void AudioManager::releaseCore0() {
+    if (!wdtHeld_) return;
+    esp_task_wdt_delete(nullptr);
+    enableCore0WDT();
+    wdtHeld_ = false;
+}
+
 void AudioManager::serviceCapture() {
     Chunk& target = capture_[captureIdx_];
     const uint32_t t0 = micros();
@@ -275,6 +302,7 @@ void AudioManager::serviceCapture() {
     recordMicros_ += micros() - t0;
     captureIdx_ ^= 1;
 
+    if (wdtHeld_) esp_task_wdt_reset();
     lipLevel_ = levelFrom(target.data, target.samples);
     ++producedChunks_;
     if (xQueueSend(micQueue_, &target, 0) != pdTRUE) ++micDropped_;

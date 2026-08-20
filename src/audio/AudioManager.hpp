@@ -76,6 +76,8 @@ private:
     void serviceCapture();
     void beginAdcMic();
     size_t captureAdc(int16_t* out, size_t count, uint8_t gainShift);
+    void claimCore0();
+    void releaseCore0();
     void servicePlayback();
     static uint8_t levelFrom(const int16_t* samples, size_t count);
 
@@ -112,4 +114,5 @@ private:
     Chunk playback_[kPlaybackSlots];
     uint8_t playbackIdx_ = 0;
     bool captureWarm_ = false;
+    bool wdtHeld_ = false;
 };
