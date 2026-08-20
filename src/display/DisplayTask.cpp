@@ -105,6 +105,7 @@ uint8_t DisplayTask::eyeSlotFor(const FaceFrame& f) const {
         case EyeFrame::Wide:         return m5a::kEyeWide;
         case EyeFrame::SleepyHalf:   return m5a::kEyeSleepyHalf;
         case EyeFrame::SleepyClosed: return m5a::kEyeSleepyClosed;
+        case EyeFrame::Wink:         return m5a::kEyeWink;
         default: break;
     }
     // Only a fully open eye carries a gaze direction; a half-shut lid hides

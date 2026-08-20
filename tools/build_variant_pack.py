@@ -45,19 +45,20 @@ EYE_RECT = (113, 70, 108, 49)
 MOUTH_RECT = (140, 119, 62, 33)
 
 # Firmware's fixed slot order.
-# eye_half as delivered is a wink - one eye shut, not both lids lowered - so it
-# cannot stand in for the middle of a blink. Cross-fading open and closed was
-# tried instead and the iris ghosts through as a translucent disc, because a
-# fade is not a lid coming down. The blink is therefore two stages, which at
-# 255 fps per blit passes too quickly to read as a jump. A genuine both-eyes-
-# half picture is part 09 in docs/PARTS_LIST.md; when it arrives the three
-# intermediate slots below take it and the blink softens without any code
-# change. The wink keeps no slot until the firmware has one to give it.
+# eye_half has both lids lowered with the iris half hidden, which is the middle
+# of a blink and not, as I first read it at thumbnail size, a wink. It carries
+# the three intermediate stages. Nothing here is a wink: a wink needs one eye
+# shut and the other open, and no delivered picture does that.
 EYE_SLOTS = [
     ("open_center", "master"), ("open_left", "eye_left"), ("open_right", "eye_right"),
-    ("open_up", "master"), ("open_down", "master"), ("soft_lower", "eye_closed"),
-    ("half", "eye_closed"), ("almost_closed", "eye_closed"), ("closed", "eye_closed"),
-    ("wide", "master"), ("sleepy_half", "eye_closed"), ("sleepy_closed", "eye_closed"),
+    ("open_up", "master"), ("open_down", "master"), ("soft_lower", "eye_half"),
+    ("half", "eye_half"), ("almost_closed", "eye_half"), ("closed", "eye_closed"),
+    ("wide", "master"), ("sleepy_half", "eye_half"), ("sleepy_closed", "eye_closed"),
+    # No delivered picture shuts one eye and leaves the other open, so the wink
+    # slot holds the open eyes until part 09 arrives. It is wired end to end
+    # already: the firmware has the slot and the director spends it on Playful
+    # and Mischievous, so the picture is the only thing missing.
+    ("wink", "master"),
 ]
 VISEMES = [
     ("rest", "master"), ("tiny", "mouth_small"), ("small", "mouth_small"),

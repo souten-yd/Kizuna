@@ -88,7 +88,26 @@ void CharacterDirector::startle(uint32_t nowMs) {
     saccadeY_ = -1;
 }
 
+void CharacterDirector::wink(uint32_t nowMs) {
+    // Long enough to be read as a wink rather than mistaken for a blink that
+    // went wrong on one side.
+    blinkStep_ = 0;
+    blinkRepeats_ = 0;
+    winkUntilMs_ = nowMs + 360;
+    frame_.eye = EyeFrame::Wink;
+    nextBlinkMs_ = winkUntilMs_ + random(appcfg::kBlinkMinMs, appcfg::kBlinkMaxMs);
+}
+
 void CharacterDirector::updateBlink(uint32_t nowMs) {
+    if (winkUntilMs_) {
+        if (static_cast<int32_t>(nowMs - winkUntilMs_) < 0) {
+            frame_.eye = EyeFrame::Wink;
+            return;
+        }
+        winkUntilMs_ = 0;
+        frame_.eye = EyeFrame::Open;
+    }
+
     if (state_ == CompanionState::Sleep) {
         frame_.eye = EyeFrame::Closed;
         blinkStep_ = 0;
@@ -216,6 +235,10 @@ void CharacterDirector::updateViseme(uint32_t nowMs) {
 }
 
 const FaceFrame& CharacterDirector::update(uint32_t nowMs) {
+    if (wantWink_) {
+        wantWink_ = false;
+        wink(nowMs);
+    }
     frame_.expression = expression_;
     frame_.state = state_;
     frame_.gesture = gesture_;

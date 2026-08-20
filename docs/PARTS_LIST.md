@@ -119,10 +119,16 @@ measures how much the variant differs just outside its rectangle, which for a
 redrawn variant is large by construction and says nothing about whether the
 join shows. Treat it as a hint about which parts to look at, never as a gate.
 
-### eye_half is a wink
+### eye_half is NOT a wink (corrected 2026-08-20)
 
-Part 02 arrived as one eye shut rather than both lids lowered, so it cannot
-serve as the middle of a blink. Cross-fading open and closed was tried in its
+I read part 02 as a wink at thumbnail size. Enlarged, both lids are lowered
+with the iris half hidden - it is the middle of a blink, exactly as specified,
+and it now carries `soft_lower`, `half` and `sleepy_half`. The blink runs
+open - half - closed - half - open rather than snapping between two frames.
+The paragraph below is kept because the finding it records still holds.
+
+Part 02 was thought to be one eye shut rather than both lids lowered, which
+would have meant it could not serve as the middle of a blink. Cross-fading open and closed was tried in its
 place and the iris ghosts through as a translucent disc - a fade is not a lid
 coming down. The blink is two stages for now.
 
@@ -173,3 +179,32 @@ the base removes it. But fading every edge ate the lower lash line, because the
 eye rectangle's bottom edge runs across the cheek, where the two renders already
 agree and there was nothing to hide. The eyes fade on three sides and the mouth
 on three, each leaving the shared boundary hard.
+
+## Part 09 - the wink
+
+Nothing delivered shuts one eye and leaves the other open, so this is the one
+picture still missing. Everything else for it exists: `include/AssetFormat.hpp`
+has `kEyeWink`, `include/AppTypes.hpp` has `EyeFrame::Wink`, DisplayTask maps
+between them, and CharacterDirector spends a wink on the Playful and
+Mischievous expressions and holds it 360 ms - long enough to read as deliberate
+rather than as a blink that failed on one side. Until the picture arrives the
+slot holds the open eyes, so the expressions simply do not wink.
+
+Request to the generator, same rules as parts 01-08:
+
+> Take the attached picture of the character. Change one thing: close her left
+> eye (the one on the right side of the picture) as if winking - the lid fully
+> down with the lashes drawn as a curved line, the way part 01 draws a closed
+> eye. Leave her other eye exactly as it is, fully open.
+>
+> Everything else must be identical to the original: the same pose, the same
+> framing and crop, the same hair with every strand in the same place, the same
+> jacket, collar and pendant, the same background, the same image size. Do not
+> redraw, do not re-render, do not shift or rescale the character. Do not
+> change the mouth or the eyebrows.
+>
+> Return the full picture, not a crop of the eye.
+
+A redraw is survivable - the packer keeps only the eye rectangle and registers
+the picture against the master first - but a shifted or rescaled character is
+not, and neither is a changed crop.

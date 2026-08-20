@@ -14,7 +14,14 @@ class CharacterDirector {
 public:
     void begin(uint32_t nowMs);
 
-    void setExpression(Expression e) { expression_ = e; }
+    // A wink is a deliberate act, so it is spent on the two expressions that
+    // mean the character is being playful with you rather than merely happy.
+    void setExpression(Expression e) {
+        if (e != expression_ && (e == Expression::Playful || e == Expression::Mischievous)) {
+            wantWink_ = true;
+        }
+        expression_ = e;
+    }
     void setState(CompanionState s);
     void setTilt(int8_t gazeX, int8_t gazeY);
     void setLipLevel(uint8_t level);   // 0..kVisemeCount-1, from the audio task
@@ -30,6 +37,10 @@ public:
     // used when the user presses a button or picks the device up.
     void poke(uint32_t nowMs);
     void startle(uint32_t nowMs);
+
+    // Shuts one eye and holds it there. Unlike a blink this is deliberate, so
+    // it does not run through the blink stages and is not interrupted by one.
+    void wink(uint32_t nowMs);
 
     const FaceFrame& update(uint32_t nowMs);
     const FaceFrame& frame() const { return frame_; }
@@ -53,6 +64,8 @@ private:
     uint32_t blinkStepMs_ = 0;
     uint8_t blinkStep_ = 0;       // 0 = not blinking
     uint8_t blinkRepeats_ = 0;
+    uint32_t winkUntilMs_ = 0;
+    bool wantWink_ = false;
 
     // gaze
     int8_t tiltX_ = 0;
