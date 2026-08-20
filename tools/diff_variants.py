@@ -80,9 +80,19 @@ def main() -> int:
             continue
         variant = load(path)
         if variant.shape != base.shape:
-            print(f"{path.name:<22}  size {variant.shape[1]}x{variant.shape[0]} "
-                  f"does not match the base - skipped")
-            continue
+            # Generators do not return the size they were given. If the shape
+            # is right, scale it back and carry on; the diff is about content,
+            # and a resize is not content. A different *aspect* is, so that
+            # still stops here.
+            vh, vw = variant.shape[:2]
+            if abs(vw / vh - w / h) > 0.01:
+                print(f"{path.name:<22}  {vw}x{vh} is a different shape from the "
+                      f"base - skipped")
+                continue
+            print(f"{path.name:<22}  {vw}x{vh} resized to {w}x{h}")
+            variant = np.asarray(
+                Image.fromarray(variant.astype(np.uint8)).resize((w, h), Image.LANCZOS),
+                dtype=np.int16)
         rect, fill = changed_rect(base, variant, a.threshold, a.grid)
         if rect is None:
             print(f"{path.name:<22}  identical to the base")
