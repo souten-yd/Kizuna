@@ -11,6 +11,7 @@ Everything speaks the same audio format as the firmware - 16 kHz, signed
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import math
@@ -69,7 +70,7 @@ class WhisperStt:
             audio = np.frombuffer(pcm, dtype=np.int16).astype("float32") / 32768.0
             segments, _ = self._model.transcribe(
                 audio, language=self._language, vad_filter=True,
-                beam_size=1,  # a companion wants latency more than the last 2% of WER
+                beam_size=1,
             )
             return " ".join(s.text.strip() for s in segments).strip()
 
@@ -87,12 +88,7 @@ class NullTts:
 
 
 class ToneTts:
-    """Speaks in beeps.
-
-    Not a joke feature: it makes the whole audio path - chunking, the device's
-    jitter buffer, the speaker switch and the lip sync - testable on a machine
-    with no TTS installed, which is exactly the situation during bring-up.
-    """
+    """Speaks in beeps so the whole audio path can be tested without TTS."""
 
     def __init__(self, base_freq: float = 210.0):
         self._base = base_freq
@@ -106,8 +102,6 @@ class ToneTts:
         out = array.array("h", bytes(samples * 2))
         for i in range(samples):
             t = i / SAMPLE_RATE
-            # Wobble the pitch and amplitude so the mouth animation has
-            # something to follow rather than one flat vowel.
             freq = self._base * (1.0 + 0.25 * math.sin(2 * math.pi * 2.3 * t))
             env = 0.35 + 0.65 * abs(math.sin(2 * math.pi * 3.1 * t))
             out[i] = int(11000 * env * math.sin(2 * math.pi * freq * t))
@@ -136,7 +130,6 @@ class PiperTts:
         if proc.returncode != 0:
             log.warning("piper failed: %s", err.decode("utf-8", "replace")[:200])
             return b""
-        # Piper emits 22.05 kHz; the device only ever wants 16 kHz.
         return resample_linear(raw, 22050, SAMPLE_RATE)
 
 
@@ -176,15 +169,7 @@ def stereo_to_mono(pcm: bytes) -> bytes:
 
 
 def resample_linear(pcm: bytes, src_rate: int, dst_rate: int) -> bytes:
-    """Rate conversion with an anti-aliasing filter when going down.
-
-    Interpolation alone is not enough and the failure is audible: Piper speaks
-    at 22050 Hz and the firmware plays at 16000, so everything the voice has
-    above 8 kHz - most of every "s" and "sh" - folds back into the band as
-    inharmonic noise. It sounds like grit over the whole reply, not like a
-    missing treble, which is why it is worth a filter rather than a faster
-    interpolator.
-    """
+    """Rate conversion with an anti-aliasing filter when going down."""
     if src_rate == dst_rate or not pcm:
         return pcm
     import numpy as np
@@ -194,15 +179,11 @@ def resample_linear(pcm: bytes, src_rate: int, dst_rate: int) -> bytes:
         return pcm
 
     if dst_rate < src_rate:
-        # Windowed-sinc low pass at the destination's Nyquist, with a little
-        # margin so the transition band lands below it rather than across it.
         cutoff = 0.45 * dst_rate / src_rate
         taps = 63
         n = np.arange(taps) - (taps - 1) / 2
         h = np.sinc(2 * cutoff * n) * np.hamming(taps)
         h /= h.sum()
-        # Pad by reflection: zero padding puts a click at each end, and a
-        # sentence is short enough that both ends are audible.
         pad = taps // 2
         padded = np.concatenate([x[pad:0:-1], x, x[-2:-pad - 2:-1]])
         x = np.convolve(padded, h, mode="valid")[:len(x)]
@@ -228,18 +209,17 @@ class LanguageModel(Protocol):
 
 
 class EchoLlm:
-    """Used by --mock: repeats what it heard, so the audio path can be tested
-    end to end without any model at all."""
-
     async def stream(self, history: list[dict]) -> AsyncIterator[str]:
         last = history[-1]["content"] if history else ""
         yield f"[[happy]] I heard: {last}"
 
 
 SYSTEM_PROMPT = """You are the voice of a small desktop companion robot built \
-on an M5Stack M5GO. You speak out loud through a 1 W speaker, so your replies \
-must be short - one to three sentences, no lists, no markdown, no emoji, no \
-code blocks. Write the way a person talks.
+on an M5Stack M5GO. Answer the user's actual question or request directly in a \
+natural spoken style. Do not merely repeat or paraphrase the user's input. Use \
+as many sentences as the content genuinely needs; reply length is not limited \
+by the M5 audio chunk size. Avoid markdown, emoji and code blocks unless the \
+user explicitly needs them.
 
 Begin every reply with an expression tag on its own, chosen from exactly this \
 set, in double square brackets:
@@ -260,11 +240,6 @@ LANGUAGE_NAMES = {"ja": "Japanese", "en": "English", "zh": "Chinese",
 
 
 def system_prompt(language: str | None = None) -> str:
-    """The base prompt, plus a language instruction when one is pinned.
-
-    A small local model drifts back into English after a turn or two whatever
-    the user speaks, so the instruction is worth its tokens.
-    """
     if not language:
         return SYSTEM_PROMPT
     name = LANGUAGE_NAMES.get(language, language)
@@ -273,34 +248,28 @@ def system_prompt(language: str | None = None) -> str:
 
 
 class OllamaLlm:
-    """A model running on the local network via Ollama.
-
-    Worth having for more than privacy: the M5GO itself cannot host a language
-    model - a 0.6B model at Q4 is roughly 350 MB of weights against 16 MB of
-    flash and 520 KB of RAM, and every token would need the whole file read
-    back over SPI. Moving the model one hop away, to a box on the same LAN,
-    is as local as this architecture can get.
-    """
-
     def __init__(self, model: str = "qwen3:0.6b",
                  host: str = "http://127.0.0.1:11434",
-                 system: str = "", think: bool = False, timeout: float = 120.0):
+                 system: str = "", think: bool = False,
+                 max_tokens: int | None = None, timeout: float = 120.0):
         import httpx
 
         self._client = httpx.AsyncClient(base_url=host, timeout=timeout)
         self._model = model
         self._system = system or SYSTEM_PROMPT
         self._think = think
+        self._max_tokens = max_tokens if max_tokens and max_tokens > 0 else None
 
     async def stream(self, history: list[dict]) -> AsyncIterator[str]:
+        options = {"temperature": 0.7}
+        if self._max_tokens is not None:
+            options["num_predict"] = self._max_tokens
         payload = {
             "model": self._model,
             "messages": [{"role": "system", "content": self._system}] + history,
             "stream": True,
-            # Qwen3 reasons by default. A companion answering out loud should
-            # start talking, not deliberate.
             "think": self._think,
-            "options": {"temperature": 0.7, "num_predict": 200},
+            "options": options,
         }
         async with self._client.stream("POST", "/api/chat", json=payload) as response:
             response.raise_for_status()
@@ -319,8 +288,6 @@ class OllamaLlm:
 
 
 class ClaudeLlm:
-    """Anthropic Claude. Streams so speech can start on the first sentence."""
-
     def __init__(self, model: str = "claude-opus-5", effort: str = "low",
                  max_tokens: int = 1024, system: str = SYSTEM_PROMPT):
         import anthropic
@@ -332,8 +299,6 @@ class ClaudeLlm:
         self._system = system
 
     async def stream(self, history: list[dict]) -> AsyncIterator[str]:
-        # Low effort and adaptive thinking: a companion answering out loud is
-        # judged on how fast it starts talking, not on depth.
         async with self._client.messages.stream(
             model=self._model,
             max_tokens=self._max_tokens,
@@ -349,16 +314,14 @@ class ClaudeLlm:
 class OpenAiLlm:
     """Any OpenAI-compatible `/v1/chat/completions` endpoint.
 
-    Written for QnapAssistant - a llama.cpp server on a QNAP NAS that loads the
-    model on demand and unloads it after five idle minutes - but nothing here
-    is specific to it. The first request after an idle period pays for the
-    model load, which is why the timeout is generous compared to Ollama's.
+    `max_tokens=None` intentionally omits the field so the provider/backend's
+    standard completion semantics apply. A positive value is an explicit cap.
     """
 
     def __init__(self, model: str = "Qwen3-0.6B",
                  base_url: str = "http://127.0.0.1:11435/v1",
                  api_key: str = "", system: str = "",
-                 max_tokens: int = 200, timeout: float = 180.0):
+                 max_tokens: int | None = None, timeout: float = 180.0):
         import httpx
 
         headers = {"Content-Type": "application/json"}
@@ -368,7 +331,7 @@ class OpenAiLlm:
                                          headers=headers, timeout=timeout)
         self._model = model
         self._system = system or SYSTEM_PROMPT
-        self._max_tokens = max_tokens
+        self._max_tokens = max_tokens if max_tokens and max_tokens > 0 else None
 
     async def stream(self, history: list[dict]) -> AsyncIterator[str]:
         payload = {
@@ -376,8 +339,9 @@ class OpenAiLlm:
             "messages": [{"role": "system", "content": self._system}] + history,
             "stream": True,
             "temperature": 0.7,
-            "max_tokens": self._max_tokens,
         }
+        if self._max_tokens is not None:
+            payload["max_tokens"] = self._max_tokens
         async with self._client.stream("POST", "/chat/completions", json=payload) as response:
             if response.status_code >= 400:
                 body = (await response.aread()).decode("utf-8", "replace")
@@ -395,25 +359,13 @@ class OpenAiLlm:
                 choices = obj.get("choices") or []
                 if not choices:
                     continue
-                # `reasoning_content` is where llama.cpp puts a thinking
-                # model's deliberation. A companion speaks the answer only.
                 chunk = choices[0].get("delta", {}).get("content")
                 if chunk:
                     yield chunk
 
 
 # ------------------------------------------------------- QnapAssistant ------
-# A NAS running SenseVoice, Qwen3 and Piper behind one HTTP port. It also
-# offers a single /v1/voice/chat that does all three in one call and returns
-# the audio base64 encoded inside JSON - convenient, but 455 KB of JSON for a
-# six second reply, and it cannot start speaking until the last word has been
-# synthesised. Going through the three endpoints separately keeps the audio as
-# raw WAV and lets speech start on the first sentence, which is most of what
-# makes a companion feel responsive.
-
 class QnapStt:
-    """SenseVoice on the NAS, via /v1/audio/transcriptions."""
-
     def __init__(self, base_url: str, timeout: float = 120.0):
         import httpx
 
@@ -425,25 +377,10 @@ class QnapStt:
             headers={"Content-Type": "audio/wav"})
         response.raise_for_status()
         body = response.json()
-        # SenseVoice tags language, emotion and events in-band; the reply is
-        # spoken out loud, so the tags are noise.
         return re.sub(r"<\|[^|]*\|>", "", body.get("text", "")).strip()
 
 
 class QnapTts:
-    """Piper Plus on the NAS, via /v1/audio/speech.
-
-    Returns audio/wav directly rather than base64 in JSON, which is the whole
-    reason to prefer it over /v1/voice/chat on a device with 78 KB of heap.
-
-    The `m5go` profile has the NAS do the two things this client used to do
-    badly: it resamples 22050 to 16000 behind a windowed-sinc filter instead of
-    interpolating and folding the sibilants back into the band, and it
-    normalises the peak so the reply does not clip into the 8x of gain the
-    M5Stack Core puts in front of its DAC. Both are better done once, there,
-    than by every client.
-    """
-
     def __init__(self, base_url: str, backend: str = "piper_plus",
                  language: str = "ja", speed: float = 1.0, timeout: float = 120.0,
                  peak: float = 0.0, profile: str = "m5go"):
@@ -453,7 +390,7 @@ class QnapTts:
         self._backend = backend
         self._language = language
         self._speed = speed
-        self._peak = peak          # 0 = leave it to the profile's own default
+        self._peak = peak
         self._profile = profile
 
     async def synthesize(self, text: str) -> bytes:
@@ -475,7 +412,6 @@ class QnapTts:
 
 
 def wav_to_pcm16(data: bytes) -> bytes:
-    """Any mono/stereo PCM16 WAV to the 16 kHz mono the firmware plays."""
     if not data:
         return b""
     with wave.open(BytesIO(data), "rb") as w:
@@ -488,31 +424,6 @@ def wav_to_pcm16(data: bytes) -> bytes:
 
 def shape_for_speaker(pcm: bytes, target_peak: float = 0.55,
                       highpass_hz: float = 130.0, ratio: float = 3.0) -> bytes:
-    """Conditions speech for a 1 W speaker driven by an 8-bit DAC.
-
-    The M5Stack Core drives its speaker from GPIO25, the ESP32's internal DAC,
-    which has eight bits and no more. Piper's output peaks at 99% of full scale
-    but sits at about 14% RMS, so the quiet majority of a sentence is being
-    reproduced with roughly five of those eight bits - and five-bit speech is
-    audibly gritty however clean the file is.
-
-    Three things help, in this order:
-
-    - a high pass, because the speaker cannot move enough air below ~130 Hz to
-      produce those frequencies at all; they only eat headroom and rattle the
-      case,
-    - gentle compression, which is what actually buys back DAC resolution: it
-      lifts the average level without lifting the peaks,
-    - a little headroom under full scale, so the reply does not clip into the
-      amplifier on its loudest syllable.
-
-    That last one turned out to matter most. The M5Stack Core multiplies the
-    mixer output by eight before the DAC, on top of the volume setting, so a
-    reply normalised anywhere near full scale is driven hard into the limit -
-    which is audible as a chirping warble over the voice, and which goes away
-    when the same file is played quieter. 0.55 is where it stopped; it is a
-    starting point to tune with --speaker-peak, not a constant of nature.
-    """
     if not pcm:
         return pcm
     import numpy as np
@@ -521,9 +432,6 @@ def shape_for_speaker(pcm: bytes, target_peak: float = 0.55,
     if x.size < 64:
         return pcm
 
-    # Windowed-sinc high pass, by spectral inversion of a low pass. Linear
-    # phase, and one convolution rather than a Python loop over 120,000
-    # samples.
     taps = 127
     n = np.arange(taps) - (taps - 1) / 2
     lp = np.sinc(2 * (highpass_hz / SAMPLE_RATE) * n) * np.hamming(taps)
@@ -534,8 +442,6 @@ def shape_for_speaker(pcm: bytes, target_peak: float = 0.55,
     padded = np.concatenate([x[pad:0:-1], x, x[-2:-pad - 2:-1]])
     x = np.convolve(padded, hp, mode="valid")[:x.size].astype(np.float32)
 
-    # Compression on a smoothed envelope, so it rides the sentence rather than
-    # pumping on individual glottal pulses.
     env = np.abs(x)
     win = max(1, int(SAMPLE_RATE * 0.02))
     kernel = np.ones(win, dtype=np.float32) / win
@@ -553,12 +459,7 @@ def shape_for_speaker(pcm: bytes, target_peak: float = 0.55,
 
 
 class MultipartReader:
-    """Incremental reader for `multipart/mixed`, fed arbitrary byte runs.
-
-    Written rather than pulled in because the point of the streaming endpoint
-    is that a part is usable the moment it lands: anything that waits for the
-    whole body first gives back the latency the endpoint exists to save.
-    """
+    """Incremental reader for `multipart/mixed`, fed arbitrary byte runs."""
 
     def __init__(self, boundary: bytes):
         self._delim = b"--" + boundary
@@ -566,7 +467,6 @@ class MultipartReader:
         self._started = False
 
     def feed(self, data: bytes):
-        """Yields (headers, body) for every part that is now complete."""
         self._buf.extend(data)
         while True:
             if not self._started:
@@ -575,7 +475,6 @@ class MultipartReader:
                     break
                 del self._buf[:at + len(self._delim)]
                 self._started = True
-            # The delimiter is followed by CRLF, or by "--" at the very end.
             if len(self._buf) < 2:
                 break
             if self._buf[:2] == b"--":
@@ -591,7 +490,7 @@ class MultipartReader:
                     headers[key.strip().lower()] = value.strip()
             length = headers.get("content-length")
             if length is None:
-                break                      # nothing sane to do without it
+                break
             want = int(length)
             start = split + 4
             if len(self._buf) < start + want:
@@ -603,17 +502,14 @@ class MultipartReader:
 
 
 class QnapVoicePipeline:
-    """Speech in, speech out, in one streaming request.
+    """QnapAssistant's ASR -> LLM -> TTS streaming endpoint.
 
-    /v1/voice/chat/stream runs the recogniser, the model and the synthesiser on
-    the NAS and sends each sentence's audio as soon as it exists, rather than
-    when the reply is finished. Measured against the non-streaming endpoint on
-    the same utterance: first audio at 3.2 s instead of 12.3 s. What the device
-    is judged on is how long it sits there saying nothing, so that is the
-    number that matters.
+    The completion may be long; QnapAssistant splits it into small speech
+    chunks and emits each WAV part while the LLM continues generating.
     """
 
-    def __init__(self, base_url: str, profile: str = "m5go", timeout: float = 180.0):
+    def __init__(self, base_url: str, profile: str = "m5go", timeout: float = 180.0,
+                 system: str = "", max_tokens: int | None = None):
         import httpx
 
         root = base_url.rstrip("/")
@@ -621,13 +517,38 @@ class QnapVoicePipeline:
             root = root[: -len("/v1")]
         self._client = httpx.AsyncClient(base_url=root, timeout=timeout)
         self._profile = profile
+        self._system = system
+        self._max_tokens = max_tokens if max_tokens and max_tokens > 0 else None
 
-    async def respond(self, pcm: bytes) -> AsyncIterator[tuple]:
-        """Yields ("transcript"|"text"|"audio"|"done", value) as they arrive."""
+    @staticmethod
+    def _context_header(context: dict) -> str:
+        raw = json.dumps(context, ensure_ascii=False,
+                         separators=(",", ":")).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+    async def respond(self, pcm: bytes, *, history: list[dict] | None = None,
+                      session_id: str = "", reset_session: bool = False) -> AsyncIterator[tuple]:
+        """Yields (transcript|text|audio|done, value) as parts arrive."""
         params = {"profile": self._profile} if self._profile else None
+        context = {}
+        if self._system:
+            context["system"] = self._system
+        if self._max_tokens is not None:
+            context["max_tokens"] = self._max_tokens
+        if history:
+            context["history"] = history
+        if session_id:
+            context["session_id"] = session_id
+        if reset_session:
+            context["reset_session"] = True
+
+        headers = {"Content-Type": "audio/wav"}
+        if context:
+            headers["X-Qnap-Voice-Context"] = self._context_header(context)
+
         async with self._client.stream(
             "POST", "/v1/voice/chat/stream", params=params,
-            content=pcm_to_wav(pcm), headers={"Content-Type": "audio/wav"},
+            content=pcm_to_wav(pcm), headers=headers,
         ) as response:
             if response.status_code >= 400:
                 body = (await response.aread()).decode("utf-8", "replace")
@@ -644,8 +565,8 @@ class QnapVoicePipeline:
 
             reader = MultipartReader(boundary.encode())
             async for data in response.aiter_bytes():
-                for headers, body in reader.feed(data):
-                    kind = headers.get("x-qnap-part-type", "")
+                for part_headers, body in reader.feed(data):
+                    kind = part_headers.get("x-qnap-part-type", "")
                     if kind == "audio":
                         yield "audio", wav_to_pcm16(body)
                     elif kind in ("transcript", "text", "done", "meta"):
