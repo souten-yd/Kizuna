@@ -89,9 +89,20 @@ constexpr size_t kAudioBytesPerChunk = kAudioSamplesPerChunk * sizeof(int16_t);
 constexpr uint8_t kMicQueueDepth = 8;
 constexpr uint8_t kPlaybackQueueDepth = 24;     // ~480 ms jitter buffer
 constexpr uint8_t kPlaybackPrerollChunks = 4;   // ~80 ms before first output
-// The M5GO's electret feeds the ADC at a low level; M5Unified multiplies
-// what it reads by this before handing it over.
-constexpr uint8_t kMicMagnification = 16;
+// The microphone is read from the ADC directly rather than through I2S.
+// ESP32's I2S built-in ADC mode delivers roughly a eighteenth of the sample
+// rate it is configured with - measured here as 16000 asked for and 672
+// achieved, and reported upstream as arduino-esp32 #6738, closed as not
+// planned. M5Stack's own M5GO microphone example does the same thing this
+// does: analogRead on GPIO34, at 12 kHz.
+//
+// 12 kHz rather than 16: one conversion plus the loop overhead is comfortably
+// under 83 us and uncomfortably close to 62. The server resamples.
+constexpr uint32_t kMicSampleRate = 12000;
+constexpr size_t kMicSamplesPerChunk = kMicSampleRate / 50;   // 20 ms
+// 12 bits to 16, as in M5Stack's example. The electret has no preamp, so this
+// is where the level comes from.
+constexpr uint8_t kMicGainShift = 4;
 constexpr uint8_t kSpeakerVolume = 150;
 constexpr uint8_t kVisemeCount = 8;
 

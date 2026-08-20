@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+"""Build a companion pack from hand-drawn diff variants.
+
+Every source here is a full picture of the character that differs from the
+master in one feature. The packer keeps only the rectangle that feature lives
+in and throws the rest away, so a generator that redrew the whole head while
+changing the mouth still yields a usable part - the redrawing simply never
+reaches the screen. That is what lets these deliveries be used as they arrived.
+
+The rectangles are deliberately hand-set rather than derived per variant. A
+rectangle measured from one variant and applied to all of them keeps every
+frame of a feature in register with every other, which is what stops the seam
+that appears when each frame carries its own box.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+from PIL import Image
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import m5a
+import register
+
+SCREEN = (320, 240)
+BACKDROP = (18, 18, 22)
+
+# Measured 2026-08-20 against blank_face, which has no eyes and no mouth, so the
+# difference against it is the feature itself rather than the change between two
+# states of it. The first attempt took the eye rectangle from master vs
+# eye_closed and clipped 14 px off the top of the open eyes, because a closed
+# lid does not reach as high as an open one. A rectangle has to hold every state
+# the feature will ever take, and only a picture with the feature absent shows
+# where that is.
+#
+# Hair is excluded by requiring the base to be skin at that pixel; the two
+# pictures are separate renders, so their hair strands differ everywhere and
+# would otherwise claim the whole head.
+EYE_RECT = (113, 70, 108, 49)
+MOUTH_RECT = (140, 119, 62, 33)
+
+# Firmware's fixed slot order.
+# eye_half has both lids lowered with the iris half hidden, which is the middle
+# of a blink and not, as I first read it at thumbnail size, a wink.
+#
+# A wink needs no picture of its own. The two eyes occupy separate columns -
+# x 121..145 and x 169..197 - with a gap between them where every eye picture
+# agrees to within 4 levels of 255, because eye_closed is a true edit of master
+# rather than a re-render. Splitting there and taking one eye from each picture
+# costs nothing and shows no seam, so a slot may name one picture or a pair as
+# (left half, right half) in screen terms.
+SPLIT_X = 157      # the nose bridge: where the eye pictures agree
+SPLIT_FEATHER = 4
+
+EYE_SLOTS = [
+    ("open_center", "master"), ("open_left", "eye_left"), ("open_right", "eye_right"),
+    ("open_up", "master"), ("open_down", "master"), ("soft_lower", "eye_half"),
+    ("half", "eye_half"), ("almost_closed", "eye_half"), ("closed", "eye_closed"),
+    ("wide", "master"), ("sleepy_half", "eye_half"), ("sleepy_closed", "eye_closed"),
+    # Her left eye shut, her right open.
+    ("wink", ("master", "eye_closed")),
+]
+VISEMES = [
+    ("rest", "master"), ("tiny", "mouth_small"), ("small", "mouth_small"),
+    ("medium", "mouth_medium"), ("wide", "mouth_wide"), ("rounded", "mouth_medium"),
+    ("smile_closed", "master"), ("smile_open", "mouth_wide"),
+]
+
+
+def load(src: Path, name: str, ref: Image.Image | None = None):
+    """One variant, lined up with the master, flattened and scaled.
+
+    The alignment is not optional. These pictures were re-rendered rather than
+    edited, so each came back at its own offset - the base at +2.0 screen px and
+    the mouths at -1.0 - and a mouth cut from one and drawn onto the other lands
+    3 px off the face. Correcting on the full canvas puts the residual error
+    below a quarter of a screen pixel.
+    """
+    im = Image.open(src / f"{name}.png").convert("RGBA")
+    dx = dy = 0
+    if ref is not None:
+        if im.size != ref.size:
+            im = im.resize(ref.size, Image.LANCZOS)
+        im, dx, dy = register.align(ref, im)
+    flat = Image.alpha_composite(Image.new("RGBA", im.size, BACKDROP + (255,)), im)
+    return flat.convert("RGB").resize(SCREEN, Image.LANCZOS), dx, dy
+
+
+def splice(left: Image.Image, right: Image.Image) -> Image.Image:
+    """One eye from each picture, joined at the bridge of the nose.
+
+    A wink is one eye shut and the other open, which is not a new drawing so
+    much as a new pairing of two that exist. It works because the join runs
+    through a column the eye pictures already agree on - the gap between the
+    eyes differs by about 4 levels of 255 - so nothing has to be hidden there.
+    """
+    a = np.asarray(left).astype(np.float32)
+    b = np.asarray(right).astype(np.float32)
+    w = a.shape[1]
+    ramp = np.clip((np.arange(w) - (SPLIT_X - SPLIT_FEATHER / 2)) / SPLIT_FEATHER, 0, 1)
+    m = ramp[None, :, None]
+    return Image.fromarray(np.clip(a * (1 - m) + b * m, 0, 255).astype(np.uint8))
+
+
+def cut(src: Image.Image, base: Image.Image, rect, feather: int,
+        soft: str = "tlrb") -> Image.Image:
+    """The rectangle out of src, fading to base at its border.
+
+    Registration puts the pictures within a quarter pixel of each other but it
+    cannot make one generation's hair strands identical to another's, and the
+    eye rectangle's border runs through hair. A hard edge there reads as a step
+    twice the size of any change the drawing makes on its own. Fading the last
+    few pixels into the base costs nothing on the device - the firmware still
+    blits a plain rectangle - and the border stops being findable.
+    """
+    x, y, w, h = rect
+    box = (x, y, x + w, y + h)
+    part = np.asarray(src.crop(box)).astype(np.float32)
+    under = np.asarray(base.crop(box)).astype(np.float32)
+    if feather <= 0:
+        return Image.fromarray(part.astype(np.uint8))
+    # Only the edges that sit on hair are faded. The eye rectangle's bottom edge
+    # runs across the cheek, where the two renders already agree, and fading
+    # there ate the lower lash line - the feature looked cut off along its own
+    # bottom. `soft` names the edges to fade.
+    def ramp(n, lo, hi):
+        r = np.ones(n)
+        if lo:
+            r = np.minimum(r, np.clip(np.arange(n) / feather, 0, 1))
+        if hi:
+            r = np.minimum(r, np.clip((n - 1 - np.arange(n)) / feather, 0, 1))
+        return r
+    a = np.minimum(ramp(w, "l" in soft, "r" in soft)[None, :],
+                   ramp(h, "t" in soft, "b" in soft)[:, None])[..., None]
+    return Image.fromarray(np.clip(under * (1 - a) + part * a, 0, 255).astype(np.uint8))
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--src", type=Path, default=Path("assets/kizuna/variants"))
+    ap.add_argument("--out", type=Path, default=Path("build/sd/companion/packs/kizuna"))
+    ap.add_argument("--name", default="kizuna")
+    ap.add_argument("--feather", type=int, default=3,
+                    help="pixels over which a part fades into the base at its "
+                         "border. 0 for a hard edge.")
+    ap.add_argument("--base", default="blank_face",
+                    help="the picture the eye and mouth rectangles are drawn "
+                         "onto. blank_face has no eyes and no mouth, so nothing "
+                         "of the face survives underneath a part - a part can be "
+                         "moved, resized or replaced later without the old "
+                         "feature showing through it. With the rectangles fixed "
+                         "as they are now the output is the same as using "
+                         "master; the difference is what stays possible.")
+    a = ap.parse_args()
+
+    ref = Image.open(a.src / "master.png").convert("RGBA")
+    frames, shifts = {}, {}
+    wanted = []
+    for _, name in EYE_SLOTS + VISEMES + [(None, a.base)]:
+        wanted.extend(name if isinstance(name, tuple) else (name,))
+    for name in wanted:
+        if name not in frames:
+            frames[name], dx, dy = load(a.src, name, None if name == "master" else ref)
+            shifts[name] = (dx, dy)
+
+    # Only a wink puts the two eyes in different states. Everything else -
+    # blinking, looking left, looking right - has to move both together, or the
+    # face reads as broken rather than as expressive.
+    for slot, name in EYE_SLOTS:
+        if isinstance(name, tuple):
+            if slot != "wink":
+                raise SystemExit(f"slot {slot} splices two eye states; only "
+                                 "wink may do that")
+            frames[name] = splice(frames[name[0]], frames[name[1]])
+
+    out = a.out
+    out.mkdir(parents=True, exist_ok=True)
+    total = 0
+
+    # The base is streamed to the panel a band at a time over several ticks, so
+    # whatever is in it is watched being drawn. A base with no eyes and no mouth
+    # is therefore a faceless portrait, on screen for as long as the repaint
+    # takes. The featureless picture is what the rectangles are measured
+    # against, not what gets displayed: the resting eyes and mouth are baked in
+    # so the base is a complete face, and the layers on top of it replace a face
+    # rather than supply one.
+    resting = frames[a.base]
+    for rect, name in ((EYE_RECT, dict(EYE_SLOTS)["open_center"]),
+                       (MOUTH_RECT, dict(VISEMES)["rest"])):
+        x, y, w, h = rect
+        resting = resting.copy()
+        resting.paste(cut(frames[name], frames[a.base], rect, a.feather,
+                          "tlr" if rect is EYE_RECT else "lrb"), (x, y))
+    total += m5a.write_clip(out / "base" / "neutral.m5a", [resting])
+
+    ex, ey, ew, eh = EYE_RECT
+    eyes = [cut(frames[n], frames[a.base], EYE_RECT, a.feather, "tlr")
+            for _, n in EYE_SLOTS]
+    total += m5a.write_clip(out / "eyes" / "neutral.m5a", eyes)
+
+    mx, my, mw, mh = MOUTH_RECT
+    mouth = [cut(frames[n], frames[a.base], MOUTH_RECT, a.feather, "lrb")
+             for _, n in VISEMES]
+    total += m5a.write_clip(out / "mouth" / "neutral.m5a", mouth)
+
+    # Every expression resolves, so no request can miss and leave a blank face.
+    # They share one set of artwork until dedicated pictures exist.
+    recipe = json.loads(Path("assets/characters/kizuna.json").read_text())
+    entry = {"base": "base/neutral.m5a", "sway": "",
+             "eyes": "eyes/neutral.m5a", "mouth": "mouth/neutral.m5a"}
+    manifest = {
+        "pack": a.name, "character": a.name, "version": 2, "format": "rgb565be",
+        "theme": "light", "screen": {"w": SCREEN[0], "h": SCREEN[1]},
+        "eye_center": {"x": ex + ew // 2, "y": ey + eh // 2},
+        "sway_rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "sway_frames": 1,
+        "eye_rect": {"x": ex, "y": ey, "w": ew, "h": eh},
+        "mouth_rect": {"x": mx, "y": my, "w": mw, "h": mh},
+        "eye_slots": [s for s, _ in EYE_SLOTS],
+        "viseme_frames": len(VISEMES), "visemes": [v for v, _ in VISEMES],
+        "expressions": {name: dict(entry) for name in recipe["expressions"]},
+        "clips": {},
+    }
+    text = json.dumps(manifest, ensure_ascii=False, indent=1)
+    (out / "manifest.json").write_text(text)
+    total += len(text)
+
+    # The eyes and the mouth are redrawn independently between body frames
+    # (DisplayTask.cpp), so overlapping rectangles let a blink repaint the top
+    # of a mouth that is mid-word.
+    if (ey + eh > my and ex < mx + mw and mx < ex + ew):
+        raise SystemExit(f"eye rect {EYE_RECT} overlaps mouth rect {MOUTH_RECT}; "
+                         "a blink would repaint the mouth")
+
+    print(f"{a.name}: {total / 1024:.0f} KB in {out}")
+    print(f"  eyes  {ew}x{eh} = {ew * eh * 2} B/blit -> {845070 / (ew * eh * 2):.0f} fps")
+    print(f"  mouth {mw}x{mh} = {mw * mh * 2} B/blit -> {845070 / (mw * mh * 2):.0f} fps")
+    scale = ref.size[0] / SCREEN[0]
+    for name in sorted(shifts):
+        dx, dy = shifts[name]
+        if dx or dy:
+            print(f"  aligned {name}: {dx:+d},{dy:+d} canvas px "
+                  f"({dx / scale:+.2f},{dy / scale:+.2f} on screen)")
+    print(f"  {len(EYE_SLOTS)} eye slots, {len(VISEMES)} visemes, "
+          f"{len(manifest['expressions'])} expressions, no gesture clips")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

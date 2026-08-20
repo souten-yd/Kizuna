@@ -123,6 +123,7 @@ enum EyeSlot : uint8_t {
     kEyeWide,           // attentive / startled
     kEyeSleepyHalf,
     kEyeSleepyClosed,
+    kEyeWink,           // one eye shut, the other open
     kEyeSlots,
 };
 

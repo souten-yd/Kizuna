@@ -173,6 +173,7 @@ enum class EyeFrame : uint8_t {
     Wide,
     SleepyHalf,
     SleepyClosed,
+    Wink,
     Count,
 };
 

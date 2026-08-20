@@ -66,7 +66,20 @@ def check_image(path: Path, rel: str, report: Report):
         report.error(f"{rel}: mode is {image.mode}, expected RGBA")
         image = image.convert("RGBA")
     if image.size != CANVAS:
-        report.error(f"{rel}: size is {image.size}, expected {CANVAS}")
+        # The aspect is what a generator honours; the pixel count is not. Three
+        # deliveries here came back 4:3 exact and none at the size asked for,
+        # so a 4:3 file at another scale is resized rather than rejected. What
+        # would break the composite is a *different shape*, or two parts of one
+        # set at different sizes - and the second of those is caught by the
+        # cross-check at the end rather than here.
+        want = CANVAS[0] / CANVAS[1]
+        got = image.size[0] / image.size[1]
+        if abs(got - want) > 0.01:
+            report.error(f"{rel}: {image.size[0]}x{image.size[1]} is {got:.3f}:1, "
+                         f"expected {want:.3f}:1")
+        else:
+            report.warn(f"{rel}: {image.size[0]}x{image.size[1]} rather than "
+                        f"{CANVAS[0]}x{CANVAS[1]}; right shape, resized on the way in")
         # Keep going anyway. Stopping here means a regenerated delivery has to
         # be run past this tool once per defect; the registration checks below
         # are the ones that cost a redraw, so they are worth reporting even

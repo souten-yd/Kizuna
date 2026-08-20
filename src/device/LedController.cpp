@@ -47,6 +47,21 @@ void LedController::update(CompanionState state, uint8_t audioLevel, bool server
     if (nowMs - lastUpdateMs_ < kUpdateIntervalMs) return;
     lastUpdateMs_ = nowMs;
 
+    if (!brightness_) {
+        // Brightness zero means off, and off means the pin stops moving. A
+        // NeoPixel strip at brightness zero still gets its frame clocked out -
+        // 10 pixels of zeroes at 800 kHz, with interrupts disabled throughout -
+        // which is the part worth stopping when the LEDs are suspected of
+        // disturbing something else. Clear the strip once, then leave it alone.
+        if (!darkened_) {
+            pixels_.clear();
+            pixels_.show();
+            darkened_ = true;
+        }
+        return;
+    }
+    darkened_ = false;
+
     pixels_.clear();
     pixels_.setBrightness(brightness_);
 

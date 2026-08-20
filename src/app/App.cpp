@@ -96,7 +96,7 @@ void App::begin() {
     audio_.setMuted(false);
     M5.Speaker.setVolume(config_.volume);
 
-    console_.begin(&display_, &configStore_, &config_, &network_, &audio_);
+    console_.begin(&display_, &configStore_, &config_, &network_, &audio_, &leds_);
 
     network_.setBinarySink(binarySinkThunk, this);
     network_.begin(config_, events_);
@@ -137,6 +137,7 @@ void App::handleEvent(const AppEvent& event, uint32_t nowMs) {
             break;
 
         case AppEventType::SpeechBegin:
+            audio_.beginStream();
             speechEndPending_ = false;
             audio_.requestPlayback();
             break;
@@ -144,6 +145,7 @@ void App::handleEvent(const AppEvent& event, uint32_t nowMs) {
         case AppEventType::SpeechEnd:
             // Hold the SPEAKING pose until the jitter buffer has actually
             // drained, otherwise the mouth stops before the voice does.
+            audio_.endStream();
             speechEndPending_ = true;
             return;
 

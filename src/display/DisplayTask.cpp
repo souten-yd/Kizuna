@@ -105,6 +105,7 @@ uint8_t DisplayTask::eyeSlotFor(const FaceFrame& f) const {
         case EyeFrame::Wide:         return m5a::kEyeWide;
         case EyeFrame::SleepyHalf:   return m5a::kEyeSleepyHalf;
         case EyeFrame::SleepyClosed: return m5a::kEyeSleepyClosed;
+        case EyeFrame::Wink:         return m5a::kEyeWink;
         default: break;
     }
     // Only a fully open eye carries a gaze direction; a half-shut lid hides
@@ -114,6 +115,28 @@ uint8_t DisplayTask::eyeSlotFor(const FaceFrame& f) const {
     if (f.gazeY <= -2) return m5a::kEyeOpenUp;
     if (f.gazeY >= 2) return m5a::kEyeOpenDown;
     return m5a::kEyeOpenCenter;
+}
+
+namespace {
+
+bool isGazeSlot(uint8_t slot) {
+    return slot == m5a::kEyeOpenLeft || slot == m5a::kEyeOpenRight ||
+           slot == m5a::kEyeOpenUp || slot == m5a::kEyeOpenDown;
+}
+
+}  // namespace
+
+uint8_t DisplayTask::gazeStep(uint8_t from, uint8_t to) {
+    // Eyes crossing from one side to the other pass through the middle. Jumping
+    // straight from looking left to looking right reads as the eyes teleporting,
+    // because nothing in between was ever on screen. One frame of centre is
+    // enough to make it a movement - the direction changes twice instead of
+    // once, and at 10.6 KB a frame there is bandwidth to spare for it.
+    //
+    // A lid closed over the iris hides the direction entirely, so a gaze change
+    // that starts or ends shut needs no middle and does not get one.
+    if (isGazeSlot(from) && isGazeSlot(to)) return m5a::kEyeOpenCenter;
+    return to;
 }
 
 void DisplayTask::bootSequence() {
@@ -289,15 +312,40 @@ void DisplayTask::renderTick(uint32_t nowMs) {
     }
 
     if (current_.expression != drawnExpression_ && !renderer_.basePending()) {
-        renderer_.requestBase(current_.expression);
+        // Repainting the base costs 150 KB and takes several ticks, during
+        // which the picture is visibly being rebuilt. Expressions that share
+        // one base file - which is all of them until each has its own artwork -
+        // have nothing to repaint, so the eyes and mouth carry the change on
+        // their own and the body never flickers.
+        const bool sameBase = pack_.clipPath(current_.expression, AssetPack::Layer::Base) ==
+                              pack_.clipPath(drawnExpression_, AssetPack::Layer::Base);
         drawnExpression_ = current_.expression;
-        drawnSway_ = 0xFF;
-        drawnEyeSlot_ = 0xFF;
-        drawnViseme_ = 0xFF;
+        if (!sameBase) {
+            renderer_.requestBase(current_.expression);
+            drawnSway_ = 0xFF;
+            drawnEyeSlot_ = 0xFF;
+            drawnViseme_ = 0xFF;
+        }
     }
 
     if (renderer_.basePending()) {
         moved += renderer_.stepBase(budget_);
+        if (!renderer_.basePending()) {
+            // The base picture has no eyes and no mouth in it, so between the
+            // band that finishes it and the tick that would normally draw them
+            // the character is on screen with a blank face. They go down here,
+            // in the same tick, without asking the budget: together they are
+            // about 15 KB, and a budget refusal would put the blank face back.
+            const uint8_t slot = eyeSlotFor(current_);
+            const uint8_t sway = current_.swayFrame % pack_.swayFrames();
+            moved += renderer_.drawTile(current_.expression, AssetPack::Layer::Eyes,
+                                        pack_.eyeIndex(sway, slot));
+            moved += renderer_.drawTile(current_.expression, AssetPack::Layer::Mouth,
+                                        pack_.mouthIndex(sway, current_.viseme));
+            drawnSway_ = sway;
+            drawnEyeSlot_ = slot;
+            drawnViseme_ = current_.viseme;
+        }
     } else {
         const Expression e = current_.expression;
         const uint8_t slot = eyeSlotFor(current_);
@@ -331,8 +379,9 @@ void DisplayTask::renderTick(uint32_t nowMs) {
                 drawnViseme_ = current_.viseme;
             }
             if (slot != drawnEyeSlot_ && budget_.take(eyeBytes)) {
-                moved += renderer_.drawTile(e, AssetPack::Layer::Eyes, pack_.eyeIndex(sway, slot));
-                drawnEyeSlot_ = slot;
+                const uint8_t step = gazeStep(drawnEyeSlot_, slot);
+                moved += renderer_.drawTile(e, AssetPack::Layer::Eyes, pack_.eyeIndex(sway, step));
+                drawnEyeSlot_ = step;
             }
         }
     }

@@ -2,6 +2,8 @@
 
 #include <Arduino.h>
 
+#include "device/LedController.hpp"
+
 class AudioManager;
 class DisplayTask;
 class ConfigStore;
@@ -45,7 +47,7 @@ struct DeviceConfig;
 class SerialConsole {
 public:
     void begin(DisplayTask* display, ConfigStore* configStore, DeviceConfig* config,
-               NetworkManager* network, AudioManager* audio);
+               NetworkManager* network, AudioManager* audio, LedController* leds);
     void poll();
 
     bool busy() const { return busy_; }
@@ -63,6 +65,7 @@ private:
 
     DisplayTask* display_ = nullptr;
     NetworkManager* network_ = nullptr;
+    LedController* leds_ = nullptr;
     AudioManager* audio_ = nullptr;
     ConfigStore* configStore_ = nullptr;
     DeviceConfig* config_ = nullptr;

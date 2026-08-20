@@ -74,12 +74,13 @@ same character. Everything else in this document follows from that.
 
 | Property | Value |
 |---|---|
-| Master canvas | **1280 x 960 px**, RGBA PNG, transparent background |
+| Master canvas | **4:3, RGBA PNG, transparent background.** 1280 x 960 is the reference; a delivery at 1448 x 1086 or any other 4:3 size is fine and is resized on the way in. Asking for an exact pixel count does not work - three deliveries here came back 4:3 to four decimal places and never at the size requested. What matters is that every file in a set is the *same* size, which editing them all from one master guarantees. |
 | Device screen | 320 x 240 (the master is 4x, downscaled at pack time) |
 | Face centre line | **x = 640** |
 | Eye line (pupil centres) | **y = 448** |
 | Interocular distance | **192 px** between pupil centres |
 | Mouth centre | **y = 576** |
+| Text band | the bottom 224 px, **y >= 736**, is covered by the device's text panel - keep the character above it |
 | Brow line | **y = 380** |
 | Top of hair | y >= 40 (never clipped) |
 | Chin | y ~ 700 |

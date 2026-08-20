@@ -83,6 +83,7 @@ private:
     void renderProcedural(uint32_t nowMs);
     bool playGesture(Gesture gesture);
     uint8_t eyeSlotFor(const FaceFrame& f) const;
+    static uint8_t gazeStep(uint8_t from, uint8_t to);
 
     SdCard sd_;
     AssetPack pack_;

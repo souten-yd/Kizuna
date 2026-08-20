@@ -24,5 +24,6 @@ private:
 
     Adafruit_NeoPixel pixels_;
     uint8_t brightness_ = 40;
+    bool darkened_ = false;
     uint32_t lastUpdateMs_ = 0;
 };
