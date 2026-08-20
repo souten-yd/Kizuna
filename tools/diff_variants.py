@@ -112,6 +112,13 @@ def main() -> int:
     ap.add_argument("--grid", type=int, default=GRID)
     ap.add_argument("--screen", type=int, nargs=2, default=(320, 240),
                     metavar=("W", "H"), help="what the canvas becomes on the device")
+    ap.add_argument("--fixed-from", metavar="FILE",
+                    help="derive one rectangle from this variant and clip every "
+                         "other to it. The extremes of a feature bound its "
+                         "intermediate states, so open-to-closed bounds a blink - "
+                         "and a variant whose head drifted has that drift fall "
+                         "outside the rectangle, where it is discarded rather "
+                         "than drawn")
     ap.add_argument("--json", type=Path, default=None)
     a = ap.parse_args()
 
@@ -122,6 +129,22 @@ def main() -> int:
     h, w = base.shape[:2]
     sx, sy = a.screen[0] / w, a.screen[1] / h
     print(f"base {base_path.name}  {w}x{h} -> {a.screen[0]}x{a.screen[1]} on screen\n")
+
+    fixed = None
+    if a.fixed_from:
+        ref = load(a.directory / a.fixed_from)
+        if ref.shape != base.shape:
+            ref = np.asarray(Image.fromarray(ref.astype(np.uint8))
+                             .resize((w, h), Image.LANCZOS), dtype=np.int16)
+        fixed, _, _ = feature_rect(base, ref, a.grid)
+        if fixed is None:
+            raise SystemExit(f"{a.fixed_from} does not differ from the base")
+        fx0, fy0, fx1, fy1 = fixed
+        fw = round((fx1 - fx0) * sx)
+        fh = round((fy1 - fy0) * sy)
+        print(f"one rectangle for all of them, from {a.fixed_from}:")
+        print(f"  {fx0},{fy0} {fx1-fx0}x{fy1-fy0} -> {fw}x{fh} on screen, "
+              f"{fw*fh*2} bytes, {845070/(fw*fh*2):.0f} fps\n")
 
     print(f"{'variant':<22}{'feature rect (canvas)':>26}{'on screen':>14}"
           f"{'bytes':>9}{'fill':>7}{'seam':>7}")
@@ -144,6 +167,19 @@ def main() -> int:
             variant = np.asarray(
                 Image.fromarray(variant.astype(np.uint8)).resize((w, h), Image.LANCZOS),
                 dtype=np.int16)
+        if fixed is not None:
+            # Everything outside the shared rectangle is never drawn, so what
+            # matters is only how much of this variant's change it holds.
+            mag = np.abs(base - variant).max(axis=2)
+            outside = mag.copy()
+            outside[fixed[1]:fixed[3], fixed[0]:fixed[2]] = 0
+            held = 1.0 - outside.sum() / max(1.0, mag.sum())
+            note = "" if outside.mean() < 12 else "  <- much of the change is outside; check it"
+            print(f"{path.name:<22}{'(shared rectangle)':>26}{'':>14}{'':>9}"
+                  f"{held:>6.0%}{outside.mean():>7.1f}{note}")
+            out[path.stem] = {"held": held, "discarded_mean": float(outside.mean())}
+            continue
+
         rect, fill, seam = feature_rect(base, variant, a.grid)
         if rect is None:
             print(f"{path.name:<22}  identical to the base")
@@ -162,10 +198,14 @@ def main() -> int:
         out[path.stem] = {"rect": rect, "screen": [sw, sh], "bytes": by,
                           "fill": fill, "seam": seam}
 
-    if out:
+    if out and fixed is None:
         budget = 845070
         worst = max(v["bytes"] for v in out.values())
         print(f"\nlargest variant {worst} bytes -> {budget / worst:.0f} fps")
+    elif out:
+        held = min(v["held"] for v in out.values())
+        print(f"\nthe shared rectangle holds at least {held:.0%} of every "
+              f"variant's change; the rest is discarded, which is the point")
     if a.json:
         a.json.write_text(json.dumps(out, indent=2) + "\n")
         print(f"wrote {a.json}")
