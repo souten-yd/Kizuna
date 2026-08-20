@@ -70,7 +70,7 @@ class WhisperStt:
             audio = np.frombuffer(pcm, dtype=np.int16).astype("float32") / 32768.0
             segments, _ = self._model.transcribe(
                 audio, language=self._language, vad_filter=True,
-                beam_size=1,
+                beam_size=1,  # a companion wants latency more than the last 2% of WER
             )
             return " ".join(s.text.strip() for s in segments).strip()
 
@@ -88,7 +88,12 @@ class NullTts:
 
 
 class ToneTts:
-    """Speaks in beeps so the whole audio path can be tested without TTS."""
+    """Speaks in beeps.
+
+    Not a joke feature: it makes the whole audio path - chunking, the device's
+    jitter buffer, the speaker switch and the lip sync - testable on a machine
+    with no TTS installed, which is exactly the situation during bring-up.
+    """
 
     def __init__(self, base_freq: float = 210.0):
         self._base = base_freq
@@ -169,7 +174,15 @@ def stereo_to_mono(pcm: bytes) -> bytes:
 
 
 def resample_linear(pcm: bytes, src_rate: int, dst_rate: int) -> bytes:
-    """Rate conversion with an anti-aliasing filter when going down."""
+    """Rate conversion with an anti-aliasing filter when going down.
+
+    Interpolation alone is not enough and the failure is audible: Piper speaks
+    at 22050 Hz and the firmware plays at 16000, so everything the voice has
+    above 8 kHz - most of every "s" and "sh" - folds back into the band as
+    inharmonic noise. It sounds like grit over the whole reply, not like a
+    missing treble, which is why it is worth a filter rather than a faster
+    interpolator.
+    """
     if src_rate == dst_rate or not pcm:
         return pcm
     import numpy as np
@@ -267,6 +280,15 @@ def system_prompt(language: str | None = None) -> str:
 
 
 class OllamaLlm:
+    """A model running on the local network via Ollama.
+
+    Worth having for more than privacy: the M5GO itself cannot host a language
+    model - a 0.6B model at Q4 is roughly 350 MB of weights against 16 MB of
+    flash and 520 KB of RAM, and every token would need the whole file read
+    back over SPI. Moving the model one hop away, to a box on the same LAN, is
+    as local as this architecture can get.
+    """
+
     def __init__(self, model: str = "qwen3:0.6b",
                  host: str = "http://127.0.0.1:11434",
                  system: str = "", think: bool = False,
@@ -307,6 +329,8 @@ class OllamaLlm:
 
 
 class ClaudeLlm:
+    """Anthropic Claude. Streams so speech can start on the first sentence."""
+
     def __init__(self, model: str = "claude-opus-5", effort: str = "low",
                  max_tokens: int = 1024, system: str = SYSTEM_PROMPT):
         import anthropic
@@ -333,8 +357,15 @@ class ClaudeLlm:
 class OpenAiLlm:
     """Any OpenAI-compatible `/v1/chat/completions` endpoint.
 
-    `max_tokens=None` intentionally omits the field so the provider/backend's
-    standard completion semantics apply. A positive value is an explicit cap.
+    Written for QnapAssistant - a llama.cpp server on a QNAP NAS that loads the
+    model on demand and unloads it after five idle minutes - but nothing here
+    is specific to it. The first request after an idle period pays for the
+    model load, which is why the timeout is generous compared to Ollama's.
+
+    `max_tokens=None` omits the field rather than sending a number, so the
+    backend's own completion length applies. That is not the same as sending a
+    large value, and it is not the same as sending zero. A positive value is an
+    explicit cap.
     """
 
     def __init__(self, model: str = "Qwen3-0.6B",
