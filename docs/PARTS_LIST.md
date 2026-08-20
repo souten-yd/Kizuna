@@ -131,3 +131,45 @@ eyelids, leave the eyes' position, the hair, the jacket and the framing alone.
 When it arrives, `soft_lower`, `half` and `sleepy_half` in
 `tools/build_variant_pack.py` take it and the blink softens with no code change.
 The wink has no firmware slot yet and is held aside rather than misused.
+
+## 2026-08-20 evening - the featureless base
+
+A picture of the character with no eyes and no mouth (`blank_face2.png`) is now
+the base frame. Two things follow from it that did not hold before.
+
+The rectangles can be measured properly. Previously the eye rectangle came from
+master vs eye_closed and clipped 14 px off the top of the open eyes, because a
+closed lid does not reach as high as an open one. Against a base with no eyes at
+all the difference is the eye itself, in every state, so the union of the states
+is the rectangle. Hair is excluded by requiring the base to be skin at that
+pixel - the two pictures are separate renders whose hair strands differ
+everywhere, and without that test the rectangle grows to the whole head.
+
+| feature | rect | bytes/blit | ceiling |
+|---|---|---|---|
+| eyes  | (113,70) 108x49 | 10584 | 80 fps |
+| mouth | (140,119) 62x33 |  4092 | 207 fps |
+
+**The two rectangles must not overlap.** DisplayTask redraws the eyes and the
+mouth independently between body frames, so an overlapping eye rectangle lets a
+blink repaint the top of a mouth that is mid-word. The packer now refuses to
+build such a pair rather than leaving it to be noticed on hardware.
+
+### Registration is required
+
+These are re-renders, not edits, and each came back at its own offset: the base
+at +2.0 screen px, eye_half at +2.4, the mouths and the gaze pairs at -1.0, and
+only eye_closed at 0. A mouth cut from one and drawn onto another therefore
+landed 3 px off the face. `tools/register.py` measures the offset on hair and
+clothing - never on the face, which is what legitimately differs - and corrects
+it on the full canvas so the residual survives the downscale as a fraction of a
+screen pixel.
+
+### Feather only the edges that sit on hair
+
+A hard rectangle edge running through hair reads as a step twice the size of
+anything the drawing does on its own (59 against 30). Fading the last 3 px into
+the base removes it. But fading every edge ate the lower lash line, because the
+eye rectangle's bottom edge runs across the cheek, where the two renders already
+agree and there was nothing to hide. The eyes fade on three sides and the mouth
+on three, each leaving the shared boundary hard.
