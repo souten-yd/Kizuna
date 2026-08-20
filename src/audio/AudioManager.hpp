@@ -47,7 +47,13 @@ public:
     void setMuted(bool muted);
     bool muted() const { return muted_; }
     uint8_t lipLevel() const { return lipLevel_; }
-    uint16_t droppedChunks() const { return dropped_; }
+    // Playback and capture drops sound nothing alike and have nothing to do
+    // with each other: one is a gap in what you hear, the other a gap in what
+    // the server heard. Counting them together made a report that could not be
+    // acted on.
+    uint16_t droppedChunks() const { return spkDropped_ + micDropped_; }
+    uint16_t droppedPlayback() const { return spkDropped_; }
+    uint16_t droppedCapture() const { return micDropped_; }
     uint16_t playbackUnderruns() const { return underruns_; }
     uint16_t playbackRefusals() const { return refused_; }
 
@@ -81,7 +87,8 @@ private:
     volatile Mode requested_ = Mode::Idle;
     volatile bool muted_ = false;
     volatile uint8_t lipLevel_ = 0;
-    volatile uint16_t dropped_ = 0;
+    volatile uint16_t spkDropped_ = 0;
+    volatile uint16_t micDropped_ = 0;
     volatile uint16_t underruns_ = 0;
     volatile uint16_t refused_ = 0;
     uint32_t producedChunks_ = 0;

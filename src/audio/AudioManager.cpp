@@ -48,7 +48,7 @@ bool AudioManager::pushPlayback(const uint8_t* data, size_t bytes) {
         if (!chunk.samples) break;
         memcpy(chunk.data, data + offset, chunk.samples * sizeof(int16_t));
         if (xQueueSend(spkQueue_, &chunk, pdMS_TO_TICKS(20)) != pdTRUE) {
-            ++dropped_;
+            ++spkDropped_;
             ok = false;
             break;
         }
@@ -260,7 +260,7 @@ void AudioManager::serviceCapture() {
 
     lipLevel_ = levelFrom(target.data, target.samples);
     ++producedChunks_;
-    if (xQueueSend(micQueue_, &target, 0) != pdTRUE) ++dropped_;
+    if (xQueueSend(micQueue_, &target, 0) != pdTRUE) ++micDropped_;
 }
 
 void AudioManager::servicePlayback() {

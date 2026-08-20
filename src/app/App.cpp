@@ -96,7 +96,7 @@ void App::begin() {
     audio_.setMuted(false);
     M5.Speaker.setVolume(config_.volume);
 
-    console_.begin(&display_, &configStore_, &config_, &network_, &audio_);
+    console_.begin(&display_, &configStore_, &config_, &network_, &audio_, &leds_);
 
     network_.setBinarySink(binarySinkThunk, this);
     network_.begin(config_, events_);

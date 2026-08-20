@@ -169,15 +169,35 @@ def main() -> int:
             frames[name], dx, dy = load(a.src, name, None if name == "master" else ref)
             shifts[name] = (dx, dy)
 
-    for _, name in EYE_SLOTS:
+    # Only a wink puts the two eyes in different states. Everything else -
+    # blinking, looking left, looking right - has to move both together, or the
+    # face reads as broken rather than as expressive.
+    for slot, name in EYE_SLOTS:
         if isinstance(name, tuple):
+            if slot != "wink":
+                raise SystemExit(f"slot {slot} splices two eye states; only "
+                                 "wink may do that")
             frames[name] = splice(frames[name[0]], frames[name[1]])
 
     out = a.out
     out.mkdir(parents=True, exist_ok=True)
     total = 0
 
-    total += m5a.write_clip(out / "base" / "neutral.m5a", [frames[a.base]])
+    # The base is streamed to the panel a band at a time over several ticks, so
+    # whatever is in it is watched being drawn. A base with no eyes and no mouth
+    # is therefore a faceless portrait, on screen for as long as the repaint
+    # takes. The featureless picture is what the rectangles are measured
+    # against, not what gets displayed: the resting eyes and mouth are baked in
+    # so the base is a complete face, and the layers on top of it replace a face
+    # rather than supply one.
+    resting = frames[a.base]
+    for rect, name in ((EYE_RECT, dict(EYE_SLOTS)["open_center"]),
+                       (MOUTH_RECT, dict(VISEMES)["rest"])):
+        x, y, w, h = rect
+        resting = resting.copy()
+        resting.paste(cut(frames[name], frames[a.base], rect, a.feather,
+                          "tlr" if rect is EYE_RECT else "lrb"), (x, y))
+    total += m5a.write_clip(out / "base" / "neutral.m5a", [resting])
 
     ex, ey, ew, eh = EYE_RECT
     eyes = [cut(frames[n], frames[a.base], EYE_RECT, a.feather, "tlr")

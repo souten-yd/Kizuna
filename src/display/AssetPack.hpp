@@ -75,6 +75,10 @@ public:
     // Path of the largest clip, used for the boot-time throughput benchmark.
     const char* benchmarkPath() const { return benchPath_.c_str(); }
 
+    // Two expressions that name the same file have the same body, so the
+    // caller can decide not to repaint it.
+    const String& clipPath(Expression e, Layer l) const;
+
 private:
     struct OpenFile {
         String path;
@@ -90,7 +94,7 @@ private:
     };
 
     OpenFile* acquire(const String& path);
-    const String& clipPath(Expression e, Layer l) const;
+
     const String* namedClipPath(const char* name) const;
 
     bool ready_ = false;
