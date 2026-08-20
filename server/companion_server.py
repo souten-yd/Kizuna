@@ -66,6 +66,12 @@ class Session:
         self.utterance = bytearray()
         self.listening = False
         self.capture_rate = be.SAMPLE_RATE
+        # One conversation per device, kept on the NAS across reconnects: a
+        # companion that forgets what was said because the Wi-Fi blinked is not
+        # carrying a conversation. A fresh process starts the session over,
+        # which is what --keep-session turns off.
+        self.session_id = app.session_id
+        self.reset_session = app.reset_session
         self.history: list[dict] = []
         self.speaking_task: asyncio.Task | None = None
 
@@ -246,17 +252,27 @@ class Session:
     async def handle_utterance_streamed(self, audio: bytes):
         """The NAS does recognition, thought and synthesis in one request.
 
-        There is no expression tag on this path - the model here is not given
-        our system prompt - so the face is driven by the state changes instead,
-        which is what it falls back to anyway when a small model forgets the
-        tag.
+        The reply is synthesised on the NAS, so no expression tag is asked for
+        on this path - the model would say it out loud. The face follows the
+        state changes instead.
+
+        The conversation is carried by session_id rather than by sending the
+        history each turn. The NAS keeps the recent messages verbatim and
+        summarises what falls off the end, which is the only version of this
+        that survives a long conversation: the turns accumulate but the prompt
+        does not.
         """
         spoke = False
+        heard = ""
+        reply = ""
         try:
-            async for kind, payload in self.app.voice.respond(audio):
+            async for kind, payload in self.app.voice.respond(
+                    audio, session_id=self.session_id,
+                    reset_session=self.reset_session):
+                self.reset_session = False
                 if kind == "transcript":
-                    log.info("heard: %s (%s ms)",
-                             payload.get("transcript") or "(nothing)",
+                    heard = payload.get("transcript") or ""
+                    log.info("heard: %s (%s ms)", heard or "(nothing)",
                              payload.get("timings", {}).get("asr_wall_ms"))
                 elif kind == "text":
                     log.info("saying: %s", payload.get("text", ""))
@@ -266,9 +282,10 @@ class Session:
                         await self.set_expression("speaking", 3000)
                     await self.speak(payload)
                 elif kind == "done":
+                    reply = payload.get("reply", "")
                     timings = payload.get("timings", {})
-                    log.info("said: %s (first audio %s ms, total %s ms)",
-                             payload.get("reply", ""),
+                    log.info("said: %s (%d chars, first audio %s ms, total %s ms)",
+                             reply, len(reply),
                              timings.get("first_audio_ready_ms"),
                              timings.get("total_wall_ms") or timings.get("wall_ms"))
         except asyncio.CancelledError:
@@ -281,6 +298,14 @@ class Session:
             if not spoke:
                 await self.set_expression("confused", 1600)
         finally:
+            # The NAS owns the conversation on this path; this copy is for the
+            # log and for anything that switches back to the split pipeline
+            # mid-session.
+            if heard:
+                self.history.append({"role": "user", "content": heard})
+            if reply:
+                self.history.append({"role": "assistant", "content": reply})
+            del self.history[:-self.app.history_turns * 2]
             await self.send_json({"type": "state", "state": "idle"})
 
     async def say(self, sentence: str):
@@ -302,6 +327,7 @@ class Session:
 
 class CompanionApp:
     def __init__(self, stt, llm, tts, dump_dir: Path | None, history_turns: int,
+                 session_id: str = "", reset_session: bool = False,
                  voice=None):
         self.stt = stt
         self.llm = llm
@@ -310,6 +336,8 @@ class CompanionApp:
         self.voice = voice
         self.dump_dir = dump_dir
         self.history_turns = history_turns
+        self.session_id = session_id
+        self.reset_session = reset_session
 
     async def handle(self, ws):
         peer = getattr(ws, "remote_address", None)
@@ -332,7 +360,9 @@ class CompanionApp:
 def build_voice(args):
     if not args.qnap or not args.qnap_stream:
         return None
-    return be.QnapVoicePipeline(args.openai_base_url, profile=args.qnap_profile)
+    return be.QnapVoicePipeline(args.openai_base_url, profile=args.qnap_profile,
+                                system=be.voice_system_prompt(args.language),
+                                max_tokens=args.qnap_max_tokens)
 
 
 def build_backends(args):
@@ -389,6 +419,8 @@ def build_backends(args):
 async def main_async(args):
     stt, llm, tts = build_backends(args)
     app = CompanionApp(stt, llm, tts, args.dump_dir, args.history_turns,
+                       session_id=args.session_id,
+                       reset_session=not args.keep_session,
                        voice=build_voice(args))
 
     stop = asyncio.get_running_loop().create_future()
@@ -435,6 +467,21 @@ def main():
     ap.add_argument("--qnap-stream", action=argparse.BooleanOptionalAction, default=True,
                     help="use the NAS's streaming voice endpoint, which starts "
                          "speaking on the first sentence instead of the last")
+    ap.add_argument("--qnap-max-tokens", type=int, default=0,
+                    help="cap the NAS's reply at this many tokens. 0 sends no "
+                         "limit at all, which is not the same as sending zero: "
+                         "the NAS then applies whatever it is configured with, "
+                         "and /api/voice/protocol reports what that is. It was "
+                         "48 when this was written, which is why the replies "
+                         "were arriving a sentence long")
+    ap.add_argument("--session-id", default="kizuna",
+                    help="names the conversation on the NAS. The recent turns "
+                         "are kept verbatim there and the older ones are "
+                         "summarised, so the conversation can outlast both a "
+                         "reconnection and the context window")
+    ap.add_argument("--keep-session", action="store_true",
+                    help="continue the stored conversation instead of starting "
+                         "it over when this process starts")
     ap.add_argument("--qnap-profile", default="m5go",
                     help="voice profile on the NAS. 'm5go' resamples to 16 kHz "
                          "with a proper filter and limits the peak; '' uses the "
