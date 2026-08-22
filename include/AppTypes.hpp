@@ -236,6 +236,9 @@ struct FaceFrame {
     bool wifiOnline = false;
     bool serverOnline = false;
     bool muted = false;
+    uint8_t volumeStep = 0;      // 0..kVolumeSteps-1, for the bar
+    uint8_t volumeSteps = 0;     // 0 hides the bar
+    uint8_t touchAction = 0;     // touchui::Action; numeric keeps this frame POD
     bool showDebug = false;
     uint32_t seq = 0;
 };

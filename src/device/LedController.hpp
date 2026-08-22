@@ -14,6 +14,10 @@ public:
     LedController();
     void begin(uint8_t brightness);
     void setBrightness(uint8_t brightness);
+    // What is actually set, which is not always what the config says: on
+    // battery the bar is switched off without the stored setting changing.
+    // A caller that borrows the strip has to put it back here, not there.
+    uint8_t brightness() const { return brightness_; }
     void update(CompanionState state, uint8_t audioLevel, bool serverOnline, bool muted,
                 uint32_t nowMs);
     void off();

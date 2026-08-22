@@ -2,6 +2,9 @@
 
 #include <M5Unified.h>
 
+#include "Board.hpp"
+#include "TouchUi.hpp"
+
 namespace {
 
 constexpr uint16_t kPanelDark = 0x0841;
@@ -53,6 +56,10 @@ void Renderer::end() {
 void Renderer::pushTile(int16_t x, int16_t y, const uint8_t* data) const {
     // No startWrite/endWrite: the caller holds one transaction around a whole
     // batch. Taking and releasing the bus per tile costs more than the tile.
+    if constexpr (board::kHasTouch) {
+        x -= touchui::kContentShift;
+        M5.Display.setClipRect(0, 0, touchui::kX, appcfg::kScreenH);
+    }
     if (swapBytes_) {
         M5.Display.pushImage(x, y, m5a::kTileSide, m5a::kTileSide,
                              reinterpret_cast<const m5gfx::swap565_t*>(data));
@@ -60,15 +67,21 @@ void Renderer::pushTile(int16_t x, int16_t y, const uint8_t* data) const {
         M5.Display.pushImage(x, y, m5a::kTileSide, m5a::kTileSide,
                              reinterpret_cast<const m5gfx::rgb565_t*>(data));
     }
+    if constexpr (board::kHasTouch) M5.Display.clearClipRect();
 }
 
 void Renderer::pushBand(int16_t x, int16_t y, int16_t w, int16_t rows, const uint8_t* data) const {
+    if constexpr (board::kHasTouch) x -= touchui::kContentShift;
     M5.Display.startWrite();
+    if constexpr (board::kHasTouch) {
+        M5.Display.setClipRect(0, 0, touchui::kX, appcfg::kScreenH);
+    }
     if (swapBytes_) {
         M5.Display.pushImage(x, y, w, rows, reinterpret_cast<const m5gfx::swap565_t*>(data));
     } else {
         M5.Display.pushImage(x, y, w, rows, reinterpret_cast<const m5gfx::rgb565_t*>(data));
     }
+    if constexpr (board::kHasTouch) M5.Display.clearClipRect();
     M5.Display.endWrite();
 }
 
@@ -210,6 +223,106 @@ size_t Renderer::drawClipFrameTiles(const char* clip, uint16_t frame) {
     return moved;
 }
 
+void Renderer::drawTouchBar(const FaceFrame& frame) {
+    if constexpr (!board::kHasTouch) return;
+
+    const uint32_t signature = frame.touchAction |
+                               (static_cast<uint32_t>(frame.volumeStep) << 8) |
+                               (static_cast<uint32_t>(frame.volumeSteps) << 12) |
+                               (static_cast<uint32_t>(frame.muted) << 16) |
+                               (static_cast<uint32_t>(frame.state == CompanionState::Listening)
+                                << 17) |
+                               (static_cast<uint32_t>(frame.state == CompanionState::Sleep) << 18);
+    if (!touchBarDirty_ && signature == touchBarSignature_) return;
+
+    auto& d = M5.Display;
+    constexpr uint16_t kBar = 0x1082;
+    constexpr uint16_t kTile = 0x18E3;
+    constexpr uint16_t kEdge = 0x3186;
+    constexpr uint16_t kIcon = 0xBDF7;
+    constexpr uint16_t kCyan = 0x4E7F;
+    constexpr uint16_t kAmber = 0xFBE0;
+
+    d.startWrite();
+    d.fillRect(touchui::kX, 0, touchui::kWidth, appcfg::kScreenH, kBar);
+    d.drawFastVLine(touchui::kX, 0, appcfg::kScreenH, kEdge);
+
+    for (uint8_t i = 0; i < touchui::kItemCount; ++i) {
+        const int16_t y = i * touchui::kItemHeight;
+        bool active = frame.touchAction == i + 1;
+        if (i == 0) active = active || frame.state == CompanionState::Listening;
+        if (i == 2) active = active || frame.muted;
+        if (i == 4) active = active || frame.state == CompanionState::Sleep;
+        d.fillRoundRect(touchui::kX + 4, y + 3, touchui::kWidth - 8,
+                        touchui::kItemHeight - 6, 9, active ? 0x2148 : kTile);
+        d.drawRoundRect(touchui::kX + 4, y + 3, touchui::kWidth - 8,
+                        touchui::kItemHeight - 6, 9, active ? kCyan : kEdge);
+    }
+
+    const int16_t cx = touchui::kX + touchui::kWidth / 2;
+
+    // Talk: a compact studio-microphone silhouette.
+    uint16_t color = frame.state == CompanionState::Listening ? kCyan : kIcon;
+    d.drawRoundRect(cx - 5, 9, 10, 16, 5, color);
+    d.drawLine(cx - 9, 19, cx - 9, 21, color);
+    d.drawLine(cx + 9, 19, cx + 9, 21, color);
+    d.drawArc(cx, 19, 9, 8, 0, 180, color);
+    d.drawFastVLine(cx, 27, 4, color);
+    d.drawFastHLine(cx - 5, 31, 10, color);
+
+    // Volume: speaker wedge and two clean sound rays.
+    color = kIcon;
+    d.fillRect(cx - 10, 55, 5, 10, color);
+    d.fillTriangle(cx - 5, 55, cx + 2, 49, cx + 2, 71, color);
+    d.drawLine(cx + 7, 54, cx + 11, 58, color);
+    d.drawLine(cx + 11, 58, cx + 11, 62, color);
+    d.drawLine(cx + 11, 62, cx + 7, 66, color);
+    const uint8_t level = frame.volumeSteps
+                              ? min<uint8_t>(frame.volumeStep + 1, frame.volumeSteps)
+                              : 1;
+    d.fillRect(cx - 10, 73, min<int16_t>(20, level * 4), 2, kCyan);
+
+    // Mute: the same acoustic symbol, crossed only while muted.
+    color = frame.muted ? kAmber : kIcon;
+    d.fillRect(cx - 10, 95, 5, 10, color);
+    d.fillTriangle(cx - 5, 95, cx + 2, 89, cx + 2, 111, color);
+    d.drawLine(cx + 6, 94, cx + 12, 106, color);
+    d.drawLine(cx + 12, 94, cx + 6, 106, color);
+
+    // Brightness: a small sun with balanced eight-direction rays.
+    d.fillCircle(cx, 140, 5, kIcon);
+    d.drawFastVLine(cx, 128, 6, kIcon);
+    d.drawFastVLine(cx, 147, 6, kIcon);
+    d.drawFastHLine(cx - 12, 140, 6, kIcon);
+    d.drawFastHLine(cx + 7, 140, 6, kIcon);
+    d.drawLine(cx - 9, 131, cx - 5, 135, kIcon);
+    d.drawLine(cx + 5, 145, cx + 9, 149, kIcon);
+    d.drawLine(cx + 5, 135, cx + 9, 131, kIcon);
+    d.drawLine(cx - 9, 149, cx - 5, 145, kIcon);
+
+    // Sleep: crescent cut from two circles.
+    color = frame.state == CompanionState::Sleep ? kCyan : kIcon;
+    d.fillCircle(cx - 2, 180, 10, color);
+    d.fillCircle(cx + 3, 176, 9, frame.state == CompanionState::Sleep ? 0x2148 : kTile);
+
+    // Settings/reset: restrained gear; the amber underline means long-press.
+    d.drawCircle(cx, 220, 8, kIcon);
+    d.drawCircle(cx, 220, 3, kIcon);
+    for (uint8_t i = 0; i < 4; ++i) {
+        const int16_t dx = (i & 1) ? 0 : 11;
+        const int16_t dy = (i & 1) ? 11 : 0;
+        const int16_t sx = (i == 2) ? -1 : 1;
+        const int16_t sy = (i == 3) ? -1 : 1;
+        d.drawLine(cx + sx * (dx ? 7 : 0), 220 + sy * (dy ? 7 : 0),
+                   cx + sx * dx, 220 + sy * dy, kIcon);
+    }
+    d.fillRoundRect(cx - 7, 234, 14, 2, 1, kAmber);
+
+    d.endWrite();
+    touchBarDirty_ = false;
+    touchBarSignature_ = signature;
+}
+
 void Renderer::drawOverlay(const FaceFrame& frame, const FrameBudget& budget, uint32_t fpsX10) {
     auto& d = M5.Display;
     const bool light = pack_ && pack_->ready() && pack_->lightTheme();
@@ -219,7 +332,8 @@ void Renderer::drawOverlay(const FaceFrame& frame, const FrameBudget& budget, ui
     d.startWrite();
 
     const int16_t y = overlayRect_.y;
-    d.fillRect(0, y, appcfg::kScreenW, overlayRect_.h, panel);
+    d.fillRect(0, y, board::kHasTouch ? touchui::kX : appcfg::kScreenW,
+               overlayRect_.h, panel);
     d.setFont(&fonts::Font0);
     d.setTextSize(1);
 
@@ -237,6 +351,33 @@ void Renderer::drawOverlay(const FaceFrame& frame, const FrameBudget& budget, ui
         d.setTextColor(light ? 0xC980 : kOrange, panel);
         d.setCursor(160, y + 6);
         d.print("MUTE");
+    }
+
+    // Five segments between the mute label and the battery reading. Filled
+    // ones are the level, the outlines are what is left, so the bar says both
+    // where the volume is and how far it can still go - which is what the
+    // button needs it to say, since one button walking a ring is otherwise
+    // impossible to aim.
+    // Not while the debug readout is up: that starts at 196 and runs straight
+    // through the bar. Debug already replaces the battery reading, so it
+    // replaces this too rather than being drawn on top of it.
+    if (frame.volumeSteps && !frame.showDebug) {
+        constexpr int16_t kBarX = 186;
+        constexpr int16_t kSegW = 8;
+        constexpr int16_t kSegGap = 2;
+        const uint16_t on = frame.muted ? dim : (light ? 0xC980 : kOrange);
+        for (uint8_t i = 0; i < frame.volumeSteps; ++i) {
+            const int16_t sx = kBarX + i * (kSegW + kSegGap);
+            // Taller as it goes up: a level is readable at a glance from the
+            // shape even when the colours are hard to tell apart.
+            const int16_t h = 4 + i * 2;
+            const int16_t sy = y + 15 - h;
+            if (i <= frame.volumeStep && !frame.muted) {
+                d.fillRect(sx, sy, kSegW, h, on);
+            } else {
+                d.drawRect(sx, sy, kSegW, h, dim);
+            }
+        }
     }
 
     d.setTextColor(dim, panel);
@@ -282,6 +423,7 @@ void Renderer::drawMessage(const char* title, const char* line1, const char* lin
     // Nothing of the pack is on screen any more.
     baseRow_ = appcfg::kScreenH;
     overlayDirty_ = true;
+    touchBarDirty_ = true;
 }
 
 void Renderer::drawBootProgress(const char* step, uint8_t percent) {

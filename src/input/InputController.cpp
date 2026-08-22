@@ -4,6 +4,7 @@
 #include <math.h>
 
 #include "AppConfig.hpp"
+#include "Board.hpp"
 
 void InputController::begin(uint32_t nowMs) {
     lastMotionMs_ = nowMs;
@@ -27,6 +28,12 @@ bool InputController::consumeBrightnessStep() {
     return v;
 }
 
+bool InputController::consumeVolumeStep() {
+    const bool v = volumeStep_;
+    volumeStep_ = false;
+    return v;
+}
+
 bool InputController::consumeSleepToggle() {
     const bool v = sleepToggle_;
     sleepToggle_ = false;
@@ -34,12 +41,21 @@ bool InputController::consumeSleepToggle() {
 }
 
 void InputController::update(EventBus& events, uint32_t nowMs) {
+    if constexpr (board::kHasTouch) {
+        updateCoreS3Touch(events, nowMs);
+        updateMotion(events, nowMs);
+        return;
+    }
+
     // A is push-to-talk: hold to speak, release to send.
     if (M5.BtnA.wasPressed()) events.post(AppEvent(AppEventType::PttPressed));
     if (M5.BtnA.wasReleased()) events.post(AppEvent(AppEventType::PttReleased));
 
-    if (M5.BtnB.wasClicked()) muteToggle_ = true;
-    if (M5.BtnB.wasHold()) debugToggle_ = true;
+    // A tap steps the volume, a hold silences it. The two things a person
+    // reaches for mid-sentence are "louder" and "stop", and they should not be
+    // the same gesture.
+    if (M5.BtnB.wasClicked()) volumeStep_ = true;
+    if (M5.BtnB.wasHold()) muteToggle_ = true;
     if (M5.BtnC.wasClicked()) brightnessStep_ = true;
     if (M5.BtnC.wasHold()) sleepToggle_ = true;
 
@@ -52,6 +68,46 @@ void InputController::update(EventBus& events, uint32_t nowMs) {
     }
 
     updateMotion(events, nowMs);
+}
+
+void InputController::updateCoreS3Touch(EventBus& events, uint32_t nowMs) {
+    const auto& touch = M5.Touch.getDetail();
+
+    if (touch.wasPressed()) {
+        touchAction_ = touchui::actionAt(touch.x, touch.y);
+        touchStartedMs_ = nowMs;
+        if (touchAction_ == touchui::Action::Talk) {
+            events.post(AppEvent(AppEventType::PttPressed));
+        }
+    }
+
+    if (touchAction_ == touchui::Action::Settings && touch.isPressed() &&
+        nowMs - touchStartedMs_ >= appcfg::kFactoryResetHoldMs) {
+        factoryReset_ = true;
+    }
+
+    if (!touch.wasReleased()) return;
+
+    const touchui::Action released = touchui::actionAt(touch.x, touch.y);
+    const touchui::Action action = touchAction_;
+    touchAction_ = touchui::Action::None;
+    touchStartedMs_ = 0;
+
+    if (action == touchui::Action::Talk) {
+        events.post(AppEvent(AppEventType::PttReleased));
+        return;
+    }
+    // Sliding away cancels taps, which keeps a missed icon from firing its
+    // neighbour when the finger is lifted.
+    if (action == touchui::Action::None || action != released) return;
+
+    switch (action) {
+        case touchui::Action::Volume:     volumeStep_ = true; break;
+        case touchui::Action::Mute:       muteToggle_ = true; break;
+        case touchui::Action::Brightness: brightnessStep_ = true; break;
+        case touchui::Action::Sleep:      sleepToggle_ = true; break;
+        default: break;
+    }
 }
 
 void InputController::updateMotion(EventBus& events, uint32_t nowMs) {

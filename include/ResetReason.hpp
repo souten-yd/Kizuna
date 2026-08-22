@@ -10,8 +10,8 @@
 
 namespace appdiag {
 
-inline const char* resetReasonName() {
-    switch (esp_reset_reason()) {
+inline const char* resetReasonName(esp_reset_reason_t reason) {
+    switch (reason) {
         case ESP_RST_POWERON:  return "poweron";
         case ESP_RST_EXT:      return "external";
         case ESP_RST_SW:       return "software";
@@ -25,5 +25,7 @@ inline const char* resetReasonName() {
         default:               return "unknown";
     }
 }
+
+inline const char* resetReasonName() { return resetReasonName(esp_reset_reason()); }
 
 }  // namespace appdiag

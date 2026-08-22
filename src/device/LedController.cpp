@@ -1,6 +1,7 @@
 #include "LedController.hpp"
 
 #include "AppConfig.hpp"
+#include "Board.hpp"
 
 namespace {
 constexpr uint32_t kUpdateIntervalMs = 40;
@@ -17,6 +18,10 @@ LedController::LedController()
     : pixels_(appcfg::kLedCount, appcfg::kLedPin, NEO_GRB + NEO_KHZ800) {}
 
 void LedController::begin(uint8_t brightness) {
+    if constexpr (!board::kHasLedBar) {
+        brightness_ = 0;
+        return;
+    }
     pixels_.begin();
     brightness_ = brightness;
     pixels_.setBrightness(brightness_);
@@ -24,11 +29,13 @@ void LedController::begin(uint8_t brightness) {
 }
 
 void LedController::setBrightness(uint8_t brightness) {
+    if constexpr (!board::kHasLedBar) return;
     brightness_ = brightness;
     pixels_.setBrightness(brightness_);
 }
 
 void LedController::off() {
+    if constexpr (!board::kHasLedBar) return;
     pixels_.clear();
     pixels_.show();
 }
@@ -44,6 +51,7 @@ void LedController::meter(uint8_t level, uint32_t color) {
 
 void LedController::update(CompanionState state, uint8_t audioLevel, bool serverOnline, bool muted,
                            uint32_t nowMs) {
+    if constexpr (!board::kHasLedBar) return;
     if (nowMs - lastUpdateMs_ < kUpdateIntervalMs) return;
     lastUpdateMs_ = nowMs;
 

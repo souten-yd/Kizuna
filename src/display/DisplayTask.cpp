@@ -73,6 +73,11 @@ void DisplayTask::showMessage(const char* title, const char* line1, const char* 
 }
 
 bool DisplayTask::pause(uint32_t timeoutMs) {
+    // A task that was never started is not holding the bus, so the caller
+    // already has what it asked for. Safe mode does not start this task at
+    // all, and without this every SD operation there would block for the full
+    // timeout and then report the display busy.
+    if (!task_) return true;
     pauseRequested_ = true;
     const uint32_t deadline = millis() + timeoutMs;
     while (!paused_ && static_cast<int32_t>(deadline - millis()) > 0) delay(5);
@@ -238,6 +243,7 @@ bool DisplayTask::playGesture(Gesture gesture) {
 
         const uint32_t t0 = millis();
         bytesWindow_ += renderer_.drawClipFrame(name, i);
+        renderer_.drawTouchBar(current_);
         const uint32_t spent = millis() - t0;
         if (spent < frameMs) vTaskDelay(pdMS_TO_TICKS(frameMs - spent));
     }
@@ -298,6 +304,7 @@ void DisplayTask::renderProcedural(uint32_t nowMs) {
         renderer_.drawOverlay(f, budget_, stats_.fpsX10);
         lastOverlayMs_ = nowMs;
     }
+    renderer_.drawTouchBar(f);
 }
 
 void DisplayTask::renderTick(uint32_t nowMs) {
@@ -392,6 +399,7 @@ void DisplayTask::renderTick(uint32_t nowMs) {
         renderer_.drawOverlay(f, budget_, stats_.fpsX10);
         lastOverlayMs_ = nowMs;
     }
+    renderer_.drawTouchBar(current_);
 
     bytesWindow_ += moved;
 }

@@ -29,6 +29,7 @@ public:
 
 private:
     void setState(CompanionState next, uint32_t nowMs);
+    bool motionMayWake(uint32_t) const { return !deliberateSleep_; }
     Expression restingExpression() const;
 
     CompanionState state_ = CompanionState::Boot;
@@ -40,5 +41,6 @@ private:
     bool wifiOnline_ = false;
 
     uint32_t stateEnteredMs_ = 0;
+    bool deliberateSleep_ = false;
     uint32_t lastInteractionMs_ = 0;
 };

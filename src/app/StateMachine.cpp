@@ -4,6 +4,10 @@
 
 namespace {
 // If the server goes quiet after a request, do not sit in THINKING forever.
+// Longer than anyone holds a button to speak - a 30 second utterance is
+// already at the limit of what the recogniser handles well - and short enough
+// that a device left stuck comes back on its own before the user gives up on it.
+constexpr uint32_t kListeningTimeoutMs = 45000;
 constexpr uint32_t kThinkingTimeoutMs = 20000;
 // Likewise for a TTS stream whose speech.end never arrives.
 constexpr uint32_t kSpeakingTimeoutMs = 60000;
@@ -19,6 +23,9 @@ void StateMachine::begin(uint32_t nowMs) {
 
 void StateMachine::setState(CompanionState next, uint32_t nowMs) {
     if (next == state_) return;
+    // Leaving sleep by any route clears how it was entered, so the next sleep
+    // is judged on its own.
+    if (state_ == CompanionState::Sleep) deliberateSleep_ = false;
     state_ = next;
     stateEnteredMs_ = nowMs;
     // A conversational state speaks for itself; drop any decorative override.
@@ -106,17 +113,34 @@ bool StateMachine::handle(const AppEvent& event, uint32_t nowMs) {
 
         case AppEventType::MotionShake:
             noteInteraction(nowMs);
-            if (state_ == CompanionState::Sleep) setState(CompanionState::Idle, nowMs);
-            else if (state_ == CompanionState::Idle) setExpressionOverride(Expression::Excited, 1100, nowMs);
+            if (state_ == CompanionState::Sleep) {
+                if (motionMayWake(nowMs)) setState(CompanionState::Idle, nowMs);
+            } else if (state_ == CompanionState::Idle) {
+                setExpressionOverride(Expression::Excited, 1100, nowMs);
+            }
             break;
 
         case AppEventType::MotionPickup:
             noteInteraction(nowMs);
-            if (state_ == CompanionState::Sleep) setState(CompanionState::Idle, nowMs);
-            else if (state_ == CompanionState::Idle) setExpressionOverride(Expression::Playful, 1400, nowMs);
+            if (state_ == CompanionState::Sleep) {
+                if (motionMayWake(nowMs)) setState(CompanionState::Idle, nowMs);
+            } else if (state_ == CompanionState::Idle) {
+                setExpressionOverride(Expression::Playful, 1400, nowMs);
+            }
             break;
 
         case AppEventType::SleepRequested:
+            // A sleep someone asked for is not the same as a sleep the device
+            // decided on, and only one of them should be undone by movement.
+            //
+            // Letting go of the button that turns the screen off moves the
+            // device, the accelerometer calls that a pickup, and the screen
+            // came back in the same gesture that darkened it. Worse, a
+            // companion switched off on purpose should stay off while the desk
+            // is bumped around it. So deliberate sleep answers to buttons only.
+            // Sleep the device fell into on its own still wakes to a hand,
+            // which is the whole point of it.
+            deliberateSleep_ = true;
             setState(CompanionState::Sleep, nowMs);
             break;
 
@@ -143,6 +167,19 @@ void StateMachine::update(uint32_t nowMs) {
         case CompanionState::Boot:
             if (nowMs - stateEnteredMs_ > kBootHoldMs) setState(CompanionState::Idle, nowMs);
             break;
+        case CompanionState::Listening:
+            // Listening is entered by holding a button and left by releasing
+            // it, so it should not be able to outlive the press - and it did:
+            // the device sat showing "listening" with nobody touching it,
+            // whenever the release went missing because the loop was busy or
+            // the link had gone. Every other state here is already bounded;
+            // this one was not, and a state with no way out is a state you will
+            // eventually be stuck in.
+            if (nowMs - stateEnteredMs_ > kListeningTimeoutMs) {
+                setState(CompanionState::Idle, nowMs);
+                setExpressionOverride(Expression::Confused, 1800, nowMs);
+            }
+            break;
         case CompanionState::Thinking:
             if (nowMs - stateEnteredMs_ > kThinkingTimeoutMs) {
                 setState(CompanionState::Idle, nowMs);
@@ -154,6 +191,7 @@ void StateMachine::update(uint32_t nowMs) {
             break;
         case CompanionState::Idle:
             if (nowMs - lastInteractionMs_ > appcfg::kSleepyToSleepMs) {
+                deliberateSleep_ = false;   // it chose this; a hand may undo it
                 setState(CompanionState::Sleep, nowMs);
             }
             break;

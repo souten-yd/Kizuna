@@ -21,13 +21,16 @@ DeviceConfig ConfigStore::load() {
     cfg.serverHost = prefs.getString("host", "");
     cfg.serverPort = prefs.getUShort("port", appcfg::kDefaultServerPort);
     cfg.serverPath = prefs.getString("path", appcfg::kDefaultServerPath);
-    cfg.deviceName = prefs.getString("name", "M5GO-Companion");
+    cfg.deviceName = prefs.getString("name", board::kDefaultDeviceName);
     cfg.packName = prefs.getString("pack", "kizuna");
     cfg.volume = prefs.getUChar("vol", appcfg::kSpeakerVolume);
     cfg.brightness = prefs.getUChar("bright", 160);
     cfg.ledBrightness = prefs.getUChar("led", appcfg::kLedBrightness);
     cfg.swayEnabled = prefs.getBool("sway", true);
-    cfg.packServerEnabled = prefs.getBool("packsrv", false);
+    cfg.batterySaver = prefs.getBool("batsave", true);
+    cfg.txPowerDbm = prefs.getChar("txdbm", appcfg::kBatteryTxPowerDbm);
+    cfg.webServerEnabled = prefs.getBool("websrv", true);
+    cfg.otaPassword = prefs.getString("otapw", "");
     return cfg;
 }
 
@@ -44,7 +47,10 @@ bool ConfigStore::save(const DeviceConfig& cfg) {
     prefs.putUChar("bright", cfg.brightness);
     prefs.putUChar("led", cfg.ledBrightness);
     prefs.putBool("sway", cfg.swayEnabled);
-    prefs.putBool("packsrv", cfg.packServerEnabled);
+    prefs.putBool("batsave", cfg.batterySaver);
+    prefs.putChar("txdbm", cfg.txPowerDbm);
+    prefs.putBool("websrv", cfg.webServerEnabled);
+    prefs.putString("otapw", cfg.otaPassword);
     return prefs.getString("ssid", "") == cfg.wifiSsid;
 }
 
@@ -94,7 +100,13 @@ bool ConfigStore::mergeFromSd(DeviceConfig& cfg) {
     if (doc.containsKey("volume")) cfg.volume = doc["volume"];
     if (doc.containsKey("brightness")) cfg.brightness = doc["brightness"];
     if (doc.containsKey("led_brightness")) cfg.ledBrightness = doc["led_brightness"];
-    if (doc.containsKey("pack_server")) cfg.packServerEnabled = doc["pack_server"];
+    // "pack_server" is what this was called when the page only did packs;
+    // cards written before the rename still say it.
+    if (doc.containsKey("pack_server")) cfg.webServerEnabled = doc["pack_server"];
+    if (doc.containsKey("web_server")) cfg.webServerEnabled = doc["web_server"];
+    takeString("ota_password", cfg.otaPassword);
+    if (doc.containsKey("battery_saver")) cfg.batterySaver = doc["battery_saver"];
+    if (doc.containsKey("tx_power_dbm")) cfg.txPowerDbm = doc["tx_power_dbm"];
 
     if (changed) save(cfg);
     return changed;

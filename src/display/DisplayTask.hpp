@@ -70,6 +70,7 @@ public:
     bool pause(uint32_t timeoutMs = 2000);
     void resume();
     bool assetsReady() const { return assetsReady_; }
+    bool running() const { return task_ != nullptr; }
     uint8_t swayFrames() const { return pack_.swayFrames(); }
     const char* sdHint() const { return sd_.hint(); }
 

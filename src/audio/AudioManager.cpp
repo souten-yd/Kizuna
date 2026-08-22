@@ -2,8 +2,12 @@
 
 #include <math.h>
 
+#include "Board.hpp"
+
+#if !M5COMPANION_BOARD_CORES3
 #include <driver/adc.h>
 #include <soc/i2s_struct.h>
+#endif
 #include <esp_timer.h>
 #include <esp_task_wdt.h>
 
@@ -14,7 +18,7 @@ bool AudioManager::begin() {
     spkQueue_ = xQueueCreate(appcfg::kPlaybackQueueDepth, sizeof(Chunk));
     if (!micQueue_ || !spkQueue_) return false;
 
-    M5.Speaker.setVolume(appcfg::kSpeakerVolume);
+    M5.Speaker.setVolume(volume_);
     M5.Speaker.end();
 
     // Core 0 keeps audio away from the display task's SPI bursts on core 1.
@@ -25,9 +29,14 @@ void AudioManager::requestCapture() { requested_ = Mode::Capture; }
 void AudioManager::requestPlayback() { requested_ = Mode::Playback; }
 void AudioManager::requestIdle() { requested_ = Mode::Idle; }
 
+void AudioManager::setVolume(uint8_t volume) {
+    volume_ = volume;
+    if (mode_ == Mode::Playback && !muted_) M5.Speaker.setVolume(volume_);
+}
+
 void AudioManager::setMuted(bool muted) {
     muted_ = muted;
-    if (mode_ == Mode::Playback) M5.Speaker.setVolume(muted ? 0 : appcfg::kSpeakerVolume);
+    if (mode_ == Mode::Playback) M5.Speaker.setVolume(muted ? 0 : volume_);
 }
 
 bool AudioManager::playbackDrained() const {
@@ -95,7 +104,11 @@ void AudioManager::applyMode(Mode target) {
     switch (mode_) {
         case Mode::Capture:
             captureWarm_ = false;
-            releaseCore0();
+            if constexpr (board::kAnalogAudio) {
+                releaseCore0();
+            } else {
+                M5.Mic.end();
+            }
             break;
         case Mode::Playback:
             M5.Speaker.stop();
@@ -112,14 +125,18 @@ void AudioManager::applyMode(Mode target) {
     switch (target) {
         case Mode::Capture:
             xQueueReset(micQueue_);
-            beginAdcMic();
             captureIdx_ = 0;
             captureWarm_ = false;
-            claimCore0();
+            if constexpr (board::kAnalogAudio) {
+                beginAdcMic();
+                claimCore0();
+            } else if (!M5.Mic.begin()) {
+                log_e("audio: CoreS3 microphone failed to start");
+            }
             break;
         case Mode::Playback:
             M5.Speaker.begin();
-            M5.Speaker.setVolume(muted_ ? 0 : appcfg::kSpeakerVolume);
+            M5.Speaker.setVolume(muted_ ? 0 : volume_);
             prerolled_ = false;
             break;
         default:
@@ -136,10 +153,15 @@ void AudioManager::selfTest(uint16_t chunks, uint8_t overSampling, uint16_t dmaL
     requestIdle();
     for (int i = 0; i < 50 && mode_ != Mode::Idle; ++i) vTaskDelay(pdMS_TO_TICKS(10));
 
-    beginAdcMic();
     const uint8_t gain = gainShift ? gainShift : appcfg::kMicGainShift;
-    Serial.printf("mic adc1_ch6 (GPIO34) rate=%u gain_shift=%u\n",
-                  (unsigned)appcfg::kMicSampleRate, (unsigned)gain);
+    if constexpr (board::kAnalogAudio) {
+        beginAdcMic();
+        Serial.printf("mic adc1_ch6 (GPIO34) rate=%u gain_shift=%u\n",
+                      (unsigned)appcfg::kMicSampleRate, (unsigned)gain);
+    } else {
+        M5.Mic.begin();
+        Serial.printf("mic CoreS3 ES7210 rate=%u\n", (unsigned)appcfg::kMicSampleRate);
+    }
 
     static int16_t buf[appcfg::kMicSamplesPerChunk];
     uint32_t worst = 0;
@@ -148,7 +170,11 @@ void AudioManager::selfTest(uint16_t chunks, uint8_t overSampling, uint16_t dmaL
     const uint32_t started = millis();
     for (uint16_t i = 0; i < chunks; ++i) {
         const uint32_t t0 = micros();
-        captureAdc(buf, appcfg::kMicSamplesPerChunk, gain);
+        if constexpr (board::kAnalogAudio) {
+            captureAdc(buf, appcfg::kMicSamplesPerChunk, gain);
+        } else {
+            M5.Mic.record(buf, appcfg::kMicSamplesPerChunk, appcfg::kMicSampleRate);
+        }
         const uint32_t spent = micros() - t0;
         if (spent > worst) worst = spent;
         for (size_t n = 0; n < appcfg::kMicSamplesPerChunk; ++n) {
@@ -168,9 +194,14 @@ void AudioManager::selfTest(uint16_t chunks, uint8_t overSampling, uint16_t dmaL
                   (unsigned)worst, (int)peak,
                   (unsigned)(samples ? (uint32_t)sqrt((double)energy / samples) : 0),
                   (int)(dcBias_ >> 8));
+    if constexpr (!board::kAnalogAudio) M5.Mic.end();
 }
 
 void AudioManager::legacyMicClockReport(uint8_t overSampling) {
+#if M5COMPANION_BOARD_CORES3
+    (void)overSampling;
+    Serial.println("unavailable: ADC microphone clock report is M5GO-only");
+#else
     requestIdle();
     for (int i = 0; i < 50 && mode_ != Mode::Idle; ++i) vTaskDelay(pdMS_TO_TICKS(10));
     M5.Speaker.end();
@@ -211,9 +242,11 @@ void AudioManager::legacyMicClockReport(uint8_t overSampling) {
                   "\"divider_needed\":%.1f,\"i2s_clk_hz\":%.0f,\"raw_per_bck32_hz\":%.0f}\n",
                   (unsigned)cfg.over_sampling, (unsigned)n, (unsigned)a, (unsigned)b,
                   (unsigned)bck, (unsigned)bits, needed, actual, actual / 32.0f);
+#endif
 }
 
 void AudioManager::beginAdcMic() {
+#if !M5COMPANION_BOARD_CORES3
     // GPIO34 is ADC1 channel 6. 11 dB of attenuation puts the full 0-3.3 V
     // range in reach, which is what the electret's bias sits in the middle of.
     adc1_config_width(ADC_WIDTH_BIT_12);
@@ -237,9 +270,14 @@ void AudioManager::beginAdcMic() {
         dcBias_ = (sum / kPrimeSamples) << 8;
         dcPrimed_ = true;
     }
+#endif
 }
 
 size_t AudioManager::captureAdc(int16_t* out, size_t count, uint8_t gainShift) {
+#if M5COMPANION_BOARD_CORES3
+    (void)gainShift;
+    return M5.Mic.record(out, count, appcfg::kMicSampleRate) ? count : 0;
+#else
     const int64_t period = 1000000 / appcfg::kMicSampleRate;
     int64_t next = esp_timer_get_time();
     for (size_t i = 0; i < count; ++i) {
@@ -268,9 +306,11 @@ size_t AudioManager::captureAdc(int16_t* out, size_t count, uint8_t gainShift) {
         }
     }
     return count;
+#endif
 }
 
 void AudioManager::claimCore0() {
+#if !M5COMPANION_BOARD_CORES3
     // Reading the ADC by hand means spinning between samples: at 12 kHz the
     // wait is 83 us and a tick is 1 ms, so there is no sleeping through it.
     // That leaves core 0's idle task with nothing, and the idle task is what
@@ -285,13 +325,16 @@ void AudioManager::claimCore0() {
     disableCore0WDT();
     esp_task_wdt_add(nullptr);
     wdtHeld_ = true;
+#endif
 }
 
 void AudioManager::releaseCore0() {
+#if !M5COMPANION_BOARD_CORES3
     if (!wdtHeld_) return;
     esp_task_wdt_delete(nullptr);
     enableCore0WDT();
     wdtHeld_ = false;
+#endif
 }
 
 void AudioManager::serviceCapture() {
@@ -299,6 +342,7 @@ void AudioManager::serviceCapture() {
     const uint32_t t0 = micros();
     target.samples = captureAdc(target.data, appcfg::kMicSamplesPerChunk,
                                 appcfg::kMicGainShift);
+    if (!target.samples) ++recordFailures_;
     recordMicros_ += micros() - t0;
     captureIdx_ ^= 1;
 

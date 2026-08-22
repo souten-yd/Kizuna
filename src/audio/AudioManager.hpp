@@ -45,7 +45,9 @@ public:
     bool popCapture(Chunk& out);
 
     void setMuted(bool muted);
+    void setVolume(uint8_t volume);
     bool muted() const { return muted_; }
+    bool running() const { return task_ != nullptr; }
     uint8_t lipLevel() const { return lipLevel_; }
     // Playback and capture drops sound nothing alike and have nothing to do
     // with each other: one is a gap in what you hear, the other a gap in what
@@ -88,6 +90,7 @@ private:
     volatile Mode mode_ = Mode::Idle;
     volatile Mode requested_ = Mode::Idle;
     volatile bool muted_ = false;
+    volatile uint8_t volume_ = appcfg::kSpeakerVolume;
     volatile uint8_t lipLevel_ = 0;
     volatile uint16_t spkDropped_ = 0;
     volatile uint16_t micDropped_ = 0;

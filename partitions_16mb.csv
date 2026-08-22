@@ -1,7 +1,24 @@
 # name,     type, subtype,  offset,   size,     flags
+# app0 and app1 are the two halves of an over-the-air update: the running
+# firmware cannot overwrite the flash it is executing from, so an update is
+# always written to the other one. That is an ESP32 rule, not a choice.
+#
+# factory is a third, much smaller app, and it is not a copy of the firmware.
+# It is a program whose whole job is to mount the SD card, write a known-good
+# image back into app0, and restart - so it needs no Wi-Fi, no audio and no
+# character pack. OTA cannot reach it (nothing writes a factory partition
+# except esptool over USB), which is what makes it the thing to fall back to.
+# It sits in what used to be the front of an 8 MB spiffs partition that this
+# firmware has never used.
+#
+# The order matters to the build system as well as the bootloader: PlatformIO
+# sizes the application against the first `factory` or `ota_0` it finds, so
+# app0 has to come first for `pio run -e m5go` to be measured against 4 MB.
+# The recovery build names `factory` explicitly instead.
 nvs,        data, nvs,      0x9000,   0x5000,
 otadata,    data, ota,      0xe000,   0x2000,
 app0,       app,  ota_0,    0x10000,  0x400000,
 app1,       app,  ota_1,    0x410000, 0x400000,
-spiffs,     data, spiffs,   0x810000, 0x7E0000,
+factory,    app,  factory,  0x810000, 0x100000,
+storage,    data, spiffs,   0x910000, 0x6E0000,
 coredump,   data, coredump, 0xFF0000, 0x10000,
