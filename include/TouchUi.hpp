@@ -6,20 +6,21 @@
 
 namespace touchui {
 
-constexpr int16_t kWidth = 40;
+// Four generous targets fill the whole right edge. 52 x 60 px is large enough
+// to hit with the pad of a thumb without taking too much room from the face.
+constexpr int16_t kWidth = 52;
 constexpr int16_t kX = appcfg::kScreenW - kWidth;
-constexpr int16_t kItemHeight = 40;
-constexpr uint8_t kItemCount = 6;
-// Keep a 320 px composition centred in the 280 px viewport left of the rail.
+constexpr int16_t kItemHeight = appcfg::kScreenH / 4;
+constexpr uint8_t kItemCount = 4;
+constexpr uint32_t kLongPressMs = 650;
+// Keep a 320 px composition centred in the viewport left of the rail.
 constexpr int16_t kContentShift = kWidth / 2;
 
 enum class Action : uint8_t {
     None = 0,
     Talk,
     Volume,
-    Mute,
     Brightness,
-    Sleep,
     Settings,
 };
 
