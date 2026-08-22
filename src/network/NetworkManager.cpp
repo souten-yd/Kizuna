@@ -1,7 +1,11 @@
 #include "NetworkManager.hpp"
 
+#include "Board.hpp"
+#include "ResetReason.hpp"
+
 #include <ArduinoJson.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 
 #include "AppConfig.hpp"
 #include "Protocol.hpp"
@@ -26,6 +30,28 @@ void NetworkManager::startWifi() {
     WiFi.setAutoReconnect(true);
     WiFi.begin(cfg_.wifiSsid.c_str(), cfg_.wifiPassword.c_str());
     lastWifiAttemptMs_ = millis();
+    // After begin(), because the driver has to be started before it will
+    // accept this - set earlier it is silently ignored.
+    if (wantTxDbm_) setTxPower(wantTxDbm_);
+}
+
+void NetworkManager::setTxPower(int8_t dbm) {
+    wantTxDbm_ = dbm;
+    if (!dbm) return;
+    // The API works in quarter-dBm and the part tops out at 20.
+    const int8_t quarters = static_cast<int8_t>(dbm < 2 ? 8 : dbm > 20 ? 80 : dbm * 4);
+    const esp_err_t err = esp_wifi_set_max_tx_power(quarters);
+    if (err != ESP_OK) {
+        log_w("wifi: tx power %d dBm refused (%d)", dbm, err);
+        return;
+    }
+    log_i("wifi: tx power capped at %d dBm", dbm);
+}
+
+int8_t NetworkManager::txPower() const {
+    int8_t quarters = 0;
+    if (esp_wifi_get_max_tx_power(&quarters) != ESP_OK) return 0;
+    return static_cast<int8_t>(quarters / 4);
 }
 
 bool NetworkManager::wifiConnected() const {
@@ -86,6 +112,7 @@ void NetworkManager::onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
     switch (type) {
         case WStype_CONNECTED:
             wsConnected_ = true;
+            uplinkStalled_ = false;
             if (events_) events_->post(AppEvent(AppEventType::ServerConnected));
             sendHello();
             break;
@@ -162,7 +189,7 @@ void NetworkManager::sendHello() {
     if (!serverConnected()) return;
     StaticJsonDocument<448> doc;
     doc["type"] = "hello";
-    doc["device"] = "m5go";
+    doc["device"] = board::kDeviceType;
     doc["name"] = cfg_.deviceName;
     doc["protocol"] = protocol::kProtocolVersion;
     doc["fw"] = M5COMPANION_VERSION;
@@ -170,6 +197,9 @@ void NetworkManager::sendHello() {
     doc["audio_rate"] = protocol::kAudioRate;
     doc["chunk_samples"] = appcfg::kAudioSamplesPerChunk;
     doc["ip"] = ip_;
+    // Why the last boot happened. The interesting failures are the ones with
+    // the cable out, where the serial console is not there to say.
+    doc["reset"] = appdiag::resetReasonName();
     String out;
     serializeJson(doc, out);
     const bool ok = wsConnected_ ? ws_.sendTXT(out) : true;
@@ -181,6 +211,7 @@ void NetworkManager::sendListenBegin() {
     if (!serverConnected()) return;
     uplinkChunks_ = 0;
     uplinkFailures_ = 0;
+    uplinkStalled_ = false;
     // The rate the microphone actually runs at, which is not the rate the
     // speaker does: the ADC path tops out below 16 kHz. The server resamples.
     char frame[96];
@@ -239,8 +270,25 @@ bool NetworkManager::sendAudio(const int16_t* samples, size_t sampleCount) {
         Serial.write(reinterpret_cast<const uint8_t*>(samples), bytes);
     }
     if (wsConnected_) {
+        // A send that cannot go through costs the library's whole write
+        // timeout, and the uplink asks for fifty of these a second. Paying the
+        // timeout on every one turns a dead socket into a device that answers
+        // its buttons once every few seconds - which is what "it froze showing
+        // listening" was. Once one send has failed, the rest of the utterance
+        // is dropped without asking again; the next connection clears it.
+        if (uplinkStalled_) {
+            ++uplinkFailures_;
+            return false;
+        }
         const bool ok = ws_.sendBIN(reinterpret_cast<const uint8_t*>(samples), bytes);
-        ok ? ++uplinkChunks_ : ++uplinkFailures_;
+        if (ok) {
+            ++uplinkChunks_;
+        } else {
+            ++uplinkFailures_;
+            uplinkStalled_ = true;
+            log_w("uplink stalled after %u chunks; dropping the rest",
+                  (unsigned)uplinkChunks_);
+        }
         return ok;
     }
     if (serialLink_) ++uplinkChunks_;

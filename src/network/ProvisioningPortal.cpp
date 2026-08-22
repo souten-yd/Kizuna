@@ -1,5 +1,7 @@
 #include "ProvisioningPortal.hpp"
 
+#include "Board.hpp"
+
 #include <M5Unified.h>
 #include <WebServer.h>
 #include <WiFi.h>
@@ -81,7 +83,7 @@ void handleSave() {
     working.serverPath = server->arg("path");
     if (working.serverPath.isEmpty()) working.serverPath = appcfg::kDefaultServerPath;
     working.deviceName = server->arg("name");
-    if (working.deviceName.isEmpty()) working.deviceName = "M5GO-Companion";
+    if (working.deviceName.isEmpty()) working.deviceName = board::kDefaultDeviceName;
     working.packName = server->arg("pack");
     if (working.packName.isEmpty()) working.packName = "claudecode";
 

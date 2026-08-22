@@ -33,6 +33,14 @@ public:
         if (sink_ && length) sink_(data, length, sinkCtx_);
     }
     int8_t rssi() const;
+
+    // Caps the radio's transmit power, in dBm. The default is the maximum the
+    // part will do, and on a tired battery through a boost converter that
+    // maximum is a current spike measured in hundreds of milliamps - fifty
+    // times a second while an utterance is going up. Dropping it costs range
+    // and buys stability; see docs/POWER.md for which one you want.
+    void setTxPower(int8_t dbm);
+    int8_t txPower() const;
     const char* ipAddress() const { return ip_.c_str(); }
 
     void setBinarySink(BinarySink sink, void* ctx) {
@@ -72,6 +80,8 @@ private:
     bool serialLink_ = false;
     uint32_t uplinkChunks_ = 0;
     uint32_t uplinkFailures_ = 0;
+    bool uplinkStalled_ = false;
+    int8_t wantTxDbm_ = 0;   // 0 = leave the radio at whatever it defaults to
     bool wifiWasUp_ = false;
     String ip_;
     uint32_t lastWifiAttemptMs_ = 0;

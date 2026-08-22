@@ -28,6 +28,11 @@ public:
     void setSwayFrameCount(uint8_t frames);
     void setDeviceStatus(uint8_t batteryPercent, bool charging, bool wifi, bool server, bool muted);
     void setDebug(bool on) { frame_.showDebug = on; }
+    void setVolume(uint8_t step, uint8_t steps) {
+        frame_.volumeStep = step;
+        frame_.volumeSteps = steps;
+    }
+    void setTouchAction(uint8_t action) { frame_.touchAction = action; }
 
     // Request a one-shot full-screen animation from the active character pack.
     // A monotonically changing token lets the same gesture be requested twice.

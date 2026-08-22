@@ -106,6 +106,9 @@ class Session:
             await self.send_json({"type": "speech.end"})
 
     # ------------------------------------------------------------ receiving --
+    def stream_speech(self) -> "SpeechStream":
+        return SpeechStream(self, self.app.speech_lead)
+
     async def on_binary(self, data: bytes):
         if self.listening:
             self.utterance.extend(data)
@@ -120,8 +123,15 @@ class Session:
         kind = msg.get("type", "")
         if kind == "hello":
             self.name = msg.get("name", "m5go")
-            log.info("hello from %s (fw %s, protocol %s)",
-                     self.name, msg.get("fw"), msg.get("protocol"))
+            reset = msg.get("reset", "")
+            log.info("hello from %s (fw %s, protocol %s%s)",
+                     self.name, msg.get("fw"), msg.get("protocol"),
+                     f", last reset: {reset}" if reset else "")
+            if reset in ("panic", "task_wdt", "int_wdt", "other_wdt", "brownout"):
+                # Not a fresh start someone asked for. Worth saying loudly,
+                # because from across the room a crash and a power cycle look
+                # exactly alike.
+                log.warning("the device came back from %s", reset)
             await self.set_expression("happy", 1200)
 
         elif kind == "listen.begin":
@@ -157,10 +167,15 @@ class Session:
 
     # ---------------------------------------------------------- the pipeline --
     async def handle_utterance(self, audio: bytes):
-        seconds = len(audio) / (self.capture_rate * be.SAMPLE_WIDTH)
+        captured = len(audio)
+        seconds = captured / (self.capture_rate * be.SAMPLE_WIDTH)
         if self.capture_rate != be.SAMPLE_RATE:
             audio = be.resample_linear(audio, self.capture_rate, be.SAMPLE_RATE)
-        log.info("utterance: %.2f s (%d bytes)", seconds, len(audio))
+        # Both counts, and which rate each is at. Logging the duration from
+        # before the conversion beside the byte count from after it reads as a
+        # rate mismatch that is not there, and costs an hour to disprove.
+        log.info("utterance: %.2f s (%d B @ %d Hz -> %d B @ %d Hz)",
+                 seconds, captured, self.capture_rate, len(audio), be.SAMPLE_RATE)
         if seconds < 0.25:
             # Send the state back too. Without it the device sits in LISTENING
             # for ever, because nothing else ever tells it to stop - which
@@ -262,7 +277,7 @@ class Session:
         that survives a long conversation: the turns accumulate but the prompt
         does not.
         """
-        spoke = False
+        stream = self.stream_speech()
         heard = ""
         reply = ""
         try:
@@ -277,10 +292,9 @@ class Session:
                 elif kind == "text":
                     log.info("saying: %s", payload.get("text", ""))
                 elif kind == "audio":
-                    if not spoke:
-                        spoke = True
+                    if not stream.spoke and not stream.buffer:
                         await self.set_expression("speaking", 3000)
-                    await self.speak(payload)
+                    stream.feed(payload)
                 elif kind == "done":
                     reply = payload.get("reply", "")
                     timings = payload.get("timings", {})
@@ -294,10 +308,13 @@ class Session:
         except Exception:
             log.exception("voice pipeline failed")
             await self.set_expression("error", 2500)
-        else:
-            if not spoke:
-                await self.set_expression("confused", 1600)
         finally:
+            await stream.close()
+            if not stream.spoke:
+                await self.set_expression("confused", 1600)
+            elif stream.stalls:
+                log.info("the speaker ran dry %d time(s); the lead was %.1f s",
+                         stream.stalls, self.app.speech_lead)
             # The NAS owns the conversation on this path; this copy is for the
             # log and for anything that switches back to the split pipeline
             # mid-session.
@@ -325,10 +342,112 @@ class Session:
         await self.speak(pcm)
 
 
+class SpeechStream:
+    """One continuous reply, assembled from sentences that arrive apart.
+
+    The NAS synthesises each sentence as the model finishes it, so the audio
+    comes in bursts separated by however long the next sentence takes to think
+    of - seconds, on a model producing five tokens a second. Sending each burst
+    as its own utterance meant the speaker stopped between them: the device
+    drained its queue, re-armed its pre-roll and waited, and the reply came out
+    in pieces with silence in the joins.
+
+    So the reply is one utterance from the device's point of view - one
+    speech.begin, one speech.end - and the gaps are absorbed here, where memory
+    is not scarce. A lead is banked before any of it is sent, and the pacing
+    then plays that lead out at the rate the speaker consumes it. A generation
+    gap shorter than the lead is not heard at all; a longer one still shows,
+    but shortened by the lead. The device's own queue holds 480 ms and cannot
+    be the place this happens.
+    """
+
+    def __init__(self, session: "Session", lead_seconds: float):
+        self.session = session
+        self.lead_bytes = int(lead_seconds * be.SAMPLE_RATE * be.SAMPLE_WIDTH)
+        self.buffer = bytearray()
+        self.closed = False
+        self.arrived = asyncio.Event()
+        self.writer: asyncio.Task | None = None
+        self.spoke = False
+        self.stalls = 0
+
+    def feed(self, pcm: bytes):
+        if not pcm:
+            return
+        self.buffer.extend(pcm)
+        self.arrived.set()
+        if self.writer is None:
+            self.writer = asyncio.create_task(self._run())
+
+    async def close(self):
+        self.closed = True
+        self.arrived.set()
+        if self.writer is not None:
+            await self.writer
+
+    async def _bank_the_lead(self):
+        while not self.closed and len(self.buffer) < self.lead_bytes:
+            self.arrived.clear()
+            try:
+                await asyncio.wait_for(self.arrived.wait(), timeout=0.2)
+            except asyncio.TimeoutError:
+                pass
+
+    def _take(self) -> bytes | None:
+        if len(self.buffer) >= CHUNK_BYTES:
+            chunk = bytes(self.buffer[:CHUNK_BYTES])
+            del self.buffer[:CHUNK_BYTES]
+            return chunk
+        if self.closed and self.buffer:
+            chunk = bytes(self.buffer)
+            self.buffer.clear()
+            return chunk
+        return None
+
+    async def _run(self):
+        await self._bank_the_lead()
+        if not self.buffer:
+            return
+        self.spoke = True
+        await self.session.send_json({"type": "speech.begin",
+                                      "format": "pcm_s16le",
+                                      "rate": be.SAMPLE_RATE})
+        origin = time.monotonic()
+        sent = 0
+        try:
+            while True:
+                chunk = self._take()
+                if chunk is None:
+                    if self.closed:
+                        break
+                    # The lead ran out: the model is slower than the speaker.
+                    # Wait for more and restart the clock, because pacing from
+                    # the old origin would fire the backlog off in a burst and
+                    # overrun the device's queue.
+                    self.stalls += 1
+                    self.arrived.clear()
+                    await self.arrived.wait()
+                    origin = time.monotonic()
+                    sent = 0
+                    continue
+                await self.session.ws.send(chunk)
+                sent += 1
+                if sent <= PRIME_CHUNKS:
+                    continue
+                # Absolute deadlines rather than a fixed sleep: asyncio rounds a
+                # sleep up, and over a few hundred chunks that drift is another
+                # way to underrun the buffer.
+                ahead = origin + (sent - PRIME_CHUNKS) * CHUNK_SECONDS - time.monotonic()
+                if ahead > 0:
+                    await asyncio.sleep(ahead)
+        finally:
+            await self.session.send_json({"type": "speech.end"})
+
+
 class CompanionApp:
     def __init__(self, stt, llm, tts, dump_dir: Path | None, history_turns: int,
                  session_id: str = "", reset_session: bool = False,
-                 voice=None):
+                 speech_lead: float = 1.5, voice=None):
         self.stt = stt
         self.llm = llm
         self.tts = tts
@@ -338,6 +457,7 @@ class CompanionApp:
         self.history_turns = history_turns
         self.session_id = session_id
         self.reset_session = reset_session
+        self.speech_lead = speech_lead
 
     async def handle(self, ws):
         peer = getattr(ws, "remote_address", None)
@@ -421,6 +541,7 @@ async def main_async(args):
     app = CompanionApp(stt, llm, tts, args.dump_dir, args.history_turns,
                        session_id=args.session_id,
                        reset_session=not args.keep_session,
+                       speech_lead=args.speech_lead,
                        voice=build_voice(args))
 
     stop = asyncio.get_running_loop().create_future()
@@ -467,6 +588,13 @@ def main():
     ap.add_argument("--qnap-stream", action=argparse.BooleanOptionalAction, default=True,
                     help="use the NAS's streaming voice endpoint, which starts "
                          "speaking on the first sentence instead of the last")
+    ap.add_argument("--speech-lead", type=float, default=1.5,
+                    help="seconds of the reply to bank before the device starts "
+                         "speaking it. The NAS produces a sentence at a time and "
+                         "thinks between them, so without a lead the speaker "
+                         "stops in the joins. A gap shorter than this is not "
+                         "heard; the cost is that the reply starts this much "
+                         "later. 0 sends each burst the moment it arrives")
     ap.add_argument("--qnap-max-tokens", type=int, default=0,
                     help="cap the NAS's reply at this many tokens. 0 sends no "
                          "limit at all, which is not the same as sending zero: "

@@ -6,6 +6,8 @@
 
 #include <Arduino.h>
 
+#include "Board.hpp"
+
 namespace appcfg {
 
 // ---------------------------------------------------------------- system ---
@@ -55,8 +57,16 @@ constexpr size_t kTileCacheMinBytes = 12 * 1024;
 // plus the pack web server cost about 56 KB. Reserving only the offline
 // figure left 39 KB free, at which point the LED driver could not allocate
 // its RMT buffer and the WebSocket dropped every five seconds.
+//
+// The console added mDNS and the OTA listener to that bill - together about
+// another 15 KB, and both only exist once Wi-Fi is up, so they come out of the
+// same figure. The cost is tile cache, which is frames per second; the
+// alternative is the heap exhaustion above, which is the whole device. If a
+// unit needs the frames back, `web_server: false` in device.json takes all of
+// it away again - and `min_heap` on the status page is how to tell whether it
+// needs to.
 constexpr size_t kHeapReserveOffline = 110 * 1024;
-constexpr size_t kHeapReserveWifi = 170 * 1024;
+constexpr size_t kHeapReserveWifi = 185 * 1024;
 // Open .m5a file handles kept alive (SD is mounted with max_files = 8).
 constexpr uint8_t kOpenFileCacheSlots = 5;
 
@@ -86,7 +96,12 @@ constexpr uint32_t kAmbientGestureMaxMs = 17000;
 constexpr uint32_t kAudioSampleRate = 16000;
 constexpr size_t kAudioSamplesPerChunk = 320;   // 20 ms
 constexpr size_t kAudioBytesPerChunk = kAudioSamplesPerChunk * sizeof(int16_t);
-constexpr uint8_t kMicQueueDepth = 8;
+// 320 ms of microphone, against 160 ms before. The queue only has to cover the
+// worst pause between two turns of the loop that drains it, and a websocket
+// send that has to wait for the socket is exactly such a pause. Overflowing it
+// throws away speech: the device reported 1995 chunks dropped - forty seconds
+// of an utterance - on a link that was otherwise healthy.
+constexpr uint8_t kMicQueueDepth = 16;
 constexpr uint8_t kPlaybackQueueDepth = 24;     // ~480 ms jitter buffer
 constexpr uint8_t kPlaybackPrerollChunks = 4;   // ~80 ms before first output
 // The microphone is read from the ADC directly rather than through I2S.
@@ -96,14 +111,22 @@ constexpr uint8_t kPlaybackPrerollChunks = 4;   // ~80 ms before first output
 // planned. M5Stack's own M5GO microphone example does the same thing this
 // does: analogRead on GPIO34, at 12 kHz.
 //
-// 12 kHz rather than 16: one conversion plus the loop overhead is comfortably
-// under 83 us and uncomfortably close to 62. The server resamples.
-constexpr uint32_t kMicSampleRate = 12000;
+// 12 kHz rather than 16 on M5GO: one conversion plus the loop overhead is
+// comfortably under 83 us and uncomfortably close to 62. CoreS3 has a real
+// ES7210 codec and therefore records at the protocol's native 16 kHz.
+constexpr uint32_t kMicSampleRate = M5COMPANION_BOARD_CORES3 ? 16000 : 12000;
 constexpr size_t kMicSamplesPerChunk = kMicSampleRate / 50;   // 20 ms
 // 12 bits to 16, as in M5Stack's example. The electret has no preamp, so this
 // is where the level comes from.
 constexpr uint8_t kMicGainShift = 4;
 constexpr uint8_t kSpeakerVolume = 150;
+
+// Five steps the B button walks up and then wraps. Spread across the usable
+// part of the range rather than evenly across 0-255: the amplifier is fixed
+// gain and the DAC is eight bits, so the low end runs out of bits before it
+// runs out of numbers.
+constexpr uint8_t kVolumeSteps[] = {60, 100, 140, 180, 220};
+constexpr uint8_t kVolumeStepCount = sizeof(kVolumeSteps) / sizeof(kVolumeSteps[0]);
 constexpr uint8_t kVisemeCount = 8;
 
 // --------------------------------------------------------------- network ---
@@ -118,6 +141,52 @@ constexpr uint32_t kProvisioningTimeoutMs = 300000;
 constexpr uint8_t kLedPin = 15;
 constexpr uint8_t kLedCount = 10;
 constexpr uint8_t kLedBrightness = 40;
+
+// ----------------------------------------------------------------- power ---
+// What changes when the cable comes out.
+//
+// The classic Core runs from a small cell through a boost converter, and the
+// radio at full power draws a spike of a few hundred milliamps every time it
+// sends - fifty times a second while an utterance is going up. A cell with age
+// on it has internal resistance, and resistance times that current is a sag.
+// The CPU's own brownout detector sits at the lowest of its eight thresholds
+// in this build, so the rail can fall far enough to upset the SD card and the
+// radio long before anything resets and says why.
+//
+// So on battery the device gives up the three things it can most afford to:
+// range, the LED bar, and some backlight.
+constexpr int8_t kBatteryTxPowerDbm = 13;   // from ~20; about a third of the current
+constexpr uint8_t kBatteryBrightnessCap = 110;
+
+// The microphone starts, the face changes, and the radio starts sending, all
+// on the same button press. The face change is a burst of SD reads and SPI
+// writes; the radio is a burst of transmit spikes. Overlapping them is asking
+// the supply for both at once, at the exact moment the user is least willing
+// to see a failure.
+//
+// So the audio waits a moment before it goes up. Nothing is lost: the capture
+// queue holds 320 ms and this is half of that, so the delayed chunks are sent,
+// just slightly later. The reply arrives a fraction of a second further out
+// and no one can tell.
+constexpr uint32_t kUplinkHoldoffMs = 150;
+
+// Longer than the longest thing the loop is allowed to block on. See the note
+// where this is applied: the web server's response write can legitimately take
+// five seconds, which is what the default happens to be set to.
+constexpr uint32_t kLoopWatchdogSeconds = 10;
+
+// -------------------------------------------------------------- recovery ---
+// Failed boots before the small recovery application in the factory partition
+// is handed control. Later than the other rungs because it is the one that
+// writes flash; see App::escalateRecovery.
+constexpr uint8_t kRecoveryAppStreak = 5;
+
+// After the backup has been attempted, how much longer the device has to keep
+// running before the rollback is given up. The backup is the heaviest thing
+// this firmware does to itself - a megabyte and a half read out of flash and
+// written to the card - so surviving it, and then a little more, is the last
+// piece of evidence worth waiting for.
+constexpr uint32_t kSettleAfterBackupMs = 10000;
 
 // ----------------------------------------------------------------- input ---
 constexpr uint32_t kBtnHoldMs = 600;

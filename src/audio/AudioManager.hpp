@@ -45,7 +45,9 @@ public:
     bool popCapture(Chunk& out);
 
     void setMuted(bool muted);
+    void setVolume(uint8_t volume);
     bool muted() const { return muted_; }
+    bool running() const { return task_ != nullptr; }
     uint8_t lipLevel() const { return lipLevel_; }
     // Playback and capture drops sound nothing alike and have nothing to do
     // with each other: one is a gap in what you hear, the other a gap in what
@@ -76,6 +78,8 @@ private:
     void serviceCapture();
     void beginAdcMic();
     size_t captureAdc(int16_t* out, size_t count, uint8_t gainShift);
+    void claimCore0();
+    void releaseCore0();
     void servicePlayback();
     static uint8_t levelFrom(const int16_t* samples, size_t count);
 
@@ -86,6 +90,7 @@ private:
     volatile Mode mode_ = Mode::Idle;
     volatile Mode requested_ = Mode::Idle;
     volatile bool muted_ = false;
+    volatile uint8_t volume_ = appcfg::kSpeakerVolume;
     volatile uint8_t lipLevel_ = 0;
     volatile uint16_t spkDropped_ = 0;
     volatile uint16_t micDropped_ = 0;
@@ -112,4 +117,5 @@ private:
     Chunk playback_[kPlaybackSlots];
     uint8_t playbackIdx_ = 0;
     bool captureWarm_ = false;
+    bool wdtHeld_ = false;
 };

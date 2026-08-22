@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 #include "app/EventBus.hpp"
+#include "TouchUi.hpp"
 
 // Buttons and MPU6886 gestures.
 //
@@ -22,9 +23,12 @@ public:
     bool consumeDebugToggle();
     bool consumeBrightnessStep();
     bool consumeSleepToggle();
+    bool consumeVolumeStep();
+    uint8_t activeTouchAction() const { return static_cast<uint8_t>(touchAction_); }
 
 private:
     void updateMotion(EventBus& events, uint32_t nowMs);
+    void updateCoreS3Touch(EventBus& events, uint32_t nowMs);
 
     float filtX_ = 0.0f;
     float filtY_ = 0.0f;
@@ -43,4 +47,7 @@ private:
     bool debugToggle_ = false;
     bool brightnessStep_ = false;
     bool sleepToggle_ = false;
+    bool volumeStep_ = false;
+    touchui::Action touchAction_ = touchui::Action::None;
+    uint32_t touchStartedMs_ = 0;
 };

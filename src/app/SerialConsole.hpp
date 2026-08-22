@@ -3,6 +3,8 @@
 #include <Arduino.h>
 
 #include "device/LedController.hpp"
+#include "device/PowerManager.hpp"
+#include "app/EventBus.hpp"
 
 class AudioManager;
 class DisplayTask;
@@ -47,14 +49,19 @@ struct DeviceConfig;
 class SerialConsole {
 public:
     void begin(DisplayTask* display, ConfigStore* configStore, DeviceConfig* config,
-               NetworkManager* network, AudioManager* audio, LedController* leds);
+               NetworkManager* network, AudioManager* audio, LedController* leds,
+               EventBus* events, PowerManager* power);
     void poll();
 
     bool busy() const { return busy_; }
 
+    // Also reachable from the web console; see DeviceWebServer::PowerTestFn.
+    void runPowerTest(uint32_t secondsPerStage) { cmdPowerTest(secondsPerStage); }
+
 private:
     void handleLine(char* line);
     void cmdInfo();
+    void cmdPowerTest(uint32_t secondsPerStage);
     void cmdLs(const char* path);
     void cmdStat(const char* path);
     void cmdMkdir(const char* path);
@@ -66,6 +73,8 @@ private:
     DisplayTask* display_ = nullptr;
     NetworkManager* network_ = nullptr;
     LedController* leds_ = nullptr;
+    EventBus* events_ = nullptr;
+    PowerManager* power_ = nullptr;
     AudioManager* audio_ = nullptr;
     ConfigStore* configStore_ = nullptr;
     DeviceConfig* config_ = nullptr;

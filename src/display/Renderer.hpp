@@ -32,6 +32,8 @@ public:
     void markOverlayDirty() { overlayDirty_ = true; }
     bool overlayDirty() const { return overlayDirty_; }
     void drawOverlay(const FaceFrame& frame, const FrameBudget& budget, uint32_t fpsX10);
+    bool touchBarDirty() const { return touchBarDirty_; }
+    void drawTouchBar(const FaceFrame& frame);
 
     // Text screens for boot progress and unrecoverable states. These bypass
     // the asset pack entirely so they still work with no card inserted.
@@ -60,4 +62,6 @@ private:
 
     bool overlayDirty_ = true;
     Rect overlayRect_{0, appcfg::kScreenH - 20, appcfg::kScreenW, 20};
+    bool touchBarDirty_ = true;
+    uint32_t touchBarSignature_ = UINT32_MAX;
 };
