@@ -76,22 +76,39 @@ void InputController::updateCoreS3Touch(EventBus& events, uint32_t nowMs) {
     if (touch.wasPressed()) {
         touchAction_ = touchui::actionAt(touch.x, touch.y);
         touchStartedMs_ = nowMs;
+        touchLongActionFired_ = false;
         if (touchAction_ == touchui::Action::Talk) {
             events.post(AppEvent(AppEventType::PttPressed));
         }
     }
 
-    if (touchAction_ == touchui::Action::Settings && touch.isPressed() &&
-        nowMs - touchStartedMs_ >= appcfg::kFactoryResetHoldMs) {
-        factoryReset_ = true;
+    if (touch.isPressed() && touchAction_ != touchui::Action::None &&
+        touchui::actionAt(touch.x, touch.y) == touchAction_) {
+        const uint32_t heldMs = nowMs - touchStartedMs_;
+        if (!touchLongActionFired_ && heldMs >= touchui::kLongPressMs) {
+            if (touchAction_ == touchui::Action::Volume) {
+                muteToggle_ = true;
+                touchLongActionFired_ = true;
+            } else if (touchAction_ == touchui::Action::Brightness) {
+                sleepToggle_ = true;
+                touchLongActionFired_ = true;
+            }
+        }
+        if (touchAction_ == touchui::Action::Settings &&
+            heldMs >= appcfg::kFactoryResetHoldMs) {
+            factoryReset_ = true;
+            touchLongActionFired_ = true;
+        }
     }
 
     if (!touch.wasReleased()) return;
 
     const touchui::Action released = touchui::actionAt(touch.x, touch.y);
     const touchui::Action action = touchAction_;
+    const bool longActionFired = touchLongActionFired_;
     touchAction_ = touchui::Action::None;
     touchStartedMs_ = 0;
+    touchLongActionFired_ = false;
 
     if (action == touchui::Action::Talk) {
         events.post(AppEvent(AppEventType::PttReleased));
@@ -99,13 +116,11 @@ void InputController::updateCoreS3Touch(EventBus& events, uint32_t nowMs) {
     }
     // Sliding away cancels taps, which keeps a missed icon from firing its
     // neighbour when the finger is lifted.
-    if (action == touchui::Action::None || action != released) return;
+    if (action == touchui::Action::None || action != released || longActionFired) return;
 
     switch (action) {
         case touchui::Action::Volume:     volumeStep_ = true; break;
-        case touchui::Action::Mute:       muteToggle_ = true; break;
         case touchui::Action::Brightness: brightnessStep_ = true; break;
-        case touchui::Action::Sleep:      sleepToggle_ = true; break;
         default: break;
     }
 }

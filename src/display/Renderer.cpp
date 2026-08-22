@@ -236,87 +236,98 @@ void Renderer::drawTouchBar(const FaceFrame& frame) {
     if (!touchBarDirty_ && signature == touchBarSignature_) return;
 
     auto& d = M5.Display;
-    constexpr uint16_t kBar = 0x1082;
-    constexpr uint16_t kTile = 0x18E3;
-    constexpr uint16_t kEdge = 0x3186;
-    constexpr uint16_t kIcon = 0xBDF7;
-    constexpr uint16_t kCyan = 0x4E7F;
-    constexpr uint16_t kAmber = 0xFBE0;
+    constexpr uint16_t kBar = 0x0863;
+    constexpr uint16_t kTile = 0x10C6;
+    constexpr uint16_t kPressed = 0x194B;
+    constexpr uint16_t kEdge = 0x298A;
+    constexpr uint16_t kIcon = 0xDEFF;
+    constexpr uint16_t kCyan = 0x369F;
+    constexpr uint16_t kViolet = 0xA35F;
+    constexpr uint16_t kAmber = 0xFD00;
 
     d.startWrite();
     d.fillRect(touchui::kX, 0, touchui::kWidth, appcfg::kScreenH, kBar);
-    d.drawFastVLine(touchui::kX, 0, appcfg::kScreenH, kEdge);
+    d.drawFastVLine(touchui::kX, 0, appcfg::kScreenH, 0x31CD);
+    d.drawFastVLine(touchui::kX + 1, 0, appcfg::kScreenH, 0x10A6);
 
     for (uint8_t i = 0; i < touchui::kItemCount; ++i) {
         const int16_t y = i * touchui::kItemHeight;
         bool active = frame.touchAction == i + 1;
         if (i == 0) active = active || frame.state == CompanionState::Listening;
-        if (i == 2) active = active || frame.muted;
-        if (i == 4) active = active || frame.state == CompanionState::Sleep;
-        d.fillRoundRect(touchui::kX + 4, y + 3, touchui::kWidth - 8,
-                        touchui::kItemHeight - 6, 9, active ? 0x2148 : kTile);
-        d.drawRoundRect(touchui::kX + 4, y + 3, touchui::kWidth - 8,
-                        touchui::kItemHeight - 6, 9, active ? kCyan : kEdge);
+        if (i == 1) active = active || frame.muted;
+        if (i == 2) active = active || frame.state == CompanionState::Sleep;
+        const uint16_t accent = i == 3 ? kViolet : (i == 2 ? kAmber : kCyan);
+        d.fillRoundRect(touchui::kX + 5, y + 5, touchui::kWidth - 10,
+                        touchui::kItemHeight - 10, 14, active ? kPressed : kTile);
+        d.drawRoundRect(touchui::kX + 5, y + 5, touchui::kWidth - 10,
+                        touchui::kItemHeight - 10, 14, active ? accent : kEdge);
+        // A short illuminated spine gives the rail a hardware-control feel
+        // without adding labels that would be unreadable at this size.
+        if (active) d.fillRoundRect(touchui::kX + 7, y + 20, 3, 20, 2, accent);
     }
 
     const int16_t cx = touchui::kX + touchui::kWidth / 2;
 
-    // Talk: a compact studio-microphone silhouette.
+    // Talk: broadcast microphone with a live-status jewel.
     uint16_t color = frame.state == CompanionState::Listening ? kCyan : kIcon;
-    d.drawRoundRect(cx - 5, 9, 10, 16, 5, color);
-    d.drawLine(cx - 9, 19, cx - 9, 21, color);
-    d.drawLine(cx + 9, 19, cx + 9, 21, color);
-    d.drawArc(cx, 19, 9, 8, 0, 180, color);
-    d.drawFastVLine(cx, 27, 4, color);
-    d.drawFastHLine(cx - 5, 31, 10, color);
+    d.drawRoundRect(cx - 6, 15, 12, 20, 6, color);
+    d.drawFastHLine(cx - 3, 20, 6, color);
+    d.drawFastHLine(cx - 3, 24, 6, color);
+    d.drawArc(cx, 29, 12, 11, 0, 180, color);
+    d.drawFastVLine(cx, 40, 5, color);
+    d.fillRoundRect(cx - 6, 44, 12, 2, 1, color);
+    d.fillCircle(cx + 13, 17, 2, frame.state == CompanionState::Listening ? kAmber : kEdge);
 
-    // Volume: speaker wedge and two clean sound rays.
-    color = kIcon;
-    d.fillRect(cx - 10, 55, 5, 10, color);
-    d.fillTriangle(cx - 5, 55, cx + 2, 49, cx + 2, 71, color);
-    d.drawLine(cx + 7, 54, cx + 11, 58, color);
-    d.drawLine(cx + 11, 58, cx + 11, 62, color);
-    d.drawLine(cx + 11, 62, cx + 7, 66, color);
+    // Sound: one control carries both level and mute, matching its gestures.
+    const int16_t volumeY = 88;
+    color = frame.muted ? kAmber : kIcon;
+    d.fillRoundRect(cx - 14, volumeY - 5, 6, 10, 2, color);
+    d.fillTriangle(cx - 8, volumeY - 5, cx, volumeY - 13, cx, volumeY + 13, color);
+    if (frame.muted) {
+        d.drawLine(cx + 5, volumeY - 8, cx + 15, volumeY + 8, kAmber);
+        d.drawLine(cx + 15, volumeY - 8, cx + 5, volumeY + 8, kAmber);
+    } else {
+        d.drawArc(cx + 1, volumeY, 9, 7, 270, 90, color);
+        d.drawArc(cx + 1, volumeY, 15, 13, 270, 90, color);
+    }
     const uint8_t level = frame.volumeSteps
                               ? min<uint8_t>(frame.volumeStep + 1, frame.volumeSteps)
                               : 1;
-    d.fillRect(cx - 10, 73, min<int16_t>(20, level * 4), 2, kCyan);
-
-    // Mute: the same acoustic symbol, crossed only while muted.
-    color = frame.muted ? kAmber : kIcon;
-    d.fillRect(cx - 10, 95, 5, 10, color);
-    d.fillTriangle(cx - 5, 95, cx + 2, 89, cx + 2, 111, color);
-    d.drawLine(cx + 6, 94, cx + 12, 106, color);
-    d.drawLine(cx + 12, 94, cx + 6, 106, color);
-
-    // Brightness: a small sun with balanced eight-direction rays.
-    d.fillCircle(cx, 140, 5, kIcon);
-    d.drawFastVLine(cx, 128, 6, kIcon);
-    d.drawFastVLine(cx, 147, 6, kIcon);
-    d.drawFastHLine(cx - 12, 140, 6, kIcon);
-    d.drawFastHLine(cx + 7, 140, 6, kIcon);
-    d.drawLine(cx - 9, 131, cx - 5, 135, kIcon);
-    d.drawLine(cx + 5, 145, cx + 9, 149, kIcon);
-    d.drawLine(cx + 5, 135, cx + 9, 131, kIcon);
-    d.drawLine(cx - 9, 149, cx - 5, 145, kIcon);
-
-    // Sleep: crescent cut from two circles.
-    color = frame.state == CompanionState::Sleep ? kCyan : kIcon;
-    d.fillCircle(cx - 2, 180, 10, color);
-    d.fillCircle(cx + 3, 176, 9, frame.state == CompanionState::Sleep ? 0x2148 : kTile);
-
-    // Settings/reset: restrained gear; the amber underline means long-press.
-    d.drawCircle(cx, 220, 8, kIcon);
-    d.drawCircle(cx, 220, 3, kIcon);
-    for (uint8_t i = 0; i < 4; ++i) {
-        const int16_t dx = (i & 1) ? 0 : 11;
-        const int16_t dy = (i & 1) ? 11 : 0;
-        const int16_t sx = (i == 2) ? -1 : 1;
-        const int16_t sy = (i == 3) ? -1 : 1;
-        d.drawLine(cx + sx * (dx ? 7 : 0), 220 + sy * (dy ? 7 : 0),
-                   cx + sx * dx, 220 + sy * dy, kIcon);
+    for (uint8_t i = 0; i < appcfg::kVolumeStepCount; ++i) {
+        const uint16_t dot = !frame.muted && i < level ? kCyan : kEdge;
+        d.fillCircle(cx - 10 + i * 5, 109, 1, dot);
     }
-    d.fillRoundRect(cx - 7, 234, 14, 2, 1, kAmber);
+
+    // Brightness: solar aperture. Holding it turns the panel fully off.
+    const int16_t sunY = 150;
+    color = frame.state == CompanionState::Sleep ? kAmber : kIcon;
+    d.drawCircle(cx, sunY, 8, color);
+    d.fillCircle(cx, sunY, 4, color);
+    d.drawFastVLine(cx, sunY - 16, 5, color);
+    d.drawFastVLine(cx, sunY + 12, 5, color);
+    d.drawFastHLine(cx - 16, sunY, 5, color);
+    d.drawFastHLine(cx + 12, sunY, 5, color);
+    d.drawLine(cx - 11, sunY - 11, cx - 8, sunY - 8, color);
+    d.drawLine(cx + 8, sunY + 8, cx + 11, sunY + 11, color);
+    d.drawLine(cx + 8, sunY - 8, cx + 11, sunY - 11, color);
+    d.drawLine(cx - 11, sunY + 11, cx - 8, sunY + 8, color);
+
+    // Settings: a precise gear with a violet hub, visually distinct from the
+    // three immediate controls. Holding it remains the guarded reset gesture.
+    const int16_t gearY = 210;
+    d.drawCircle(cx, gearY, 11, kIcon);
+    d.drawCircle(cx, gearY, 10, kViolet);
+    d.fillCircle(cx, gearY, 4, kIcon);
+    d.fillCircle(cx, gearY, 2, kBar);
+    d.drawFastVLine(cx, gearY - 16, 5, kIcon);
+    d.drawFastVLine(cx, gearY + 12, 5, kIcon);
+    d.drawFastHLine(cx - 16, gearY, 5, kIcon);
+    d.drawFastHLine(cx + 12, gearY, 5, kIcon);
+    d.drawLine(cx - 12, gearY - 12, cx - 8, gearY - 8, kIcon);
+    d.drawLine(cx + 8, gearY + 8, cx + 12, gearY + 12, kIcon);
+    d.drawLine(cx + 8, gearY - 8, cx + 12, gearY - 12, kIcon);
+    d.drawLine(cx - 12, gearY + 12, cx - 8, gearY + 8, kIcon);
+    d.fillRoundRect(cx - 8, 230, 16, 2, 1, kViolet);
 
     d.endWrite();
     touchBarDirty_ = false;

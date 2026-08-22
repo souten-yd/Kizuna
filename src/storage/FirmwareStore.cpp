@@ -122,8 +122,11 @@ bool FirmwareStore::backupRunning(DisplayTask* display) {
             }
             done += n;
             // A megabyte and a half of flash reads and card writes, all on the
-            // loop task, which is watched.
+            // loop task, which is watched. Resetting this task is not enough:
+            // IDLE0 is watched too, so hand the core back between chunks or a
+            // perfectly healthy backup becomes a task_wdt reset.
             esp_task_wdt_reset();
+            delay(1);
         }
         out.close();
         if (failed) {
@@ -252,6 +255,9 @@ bool FirmwareStore::restore(const String& file, DisplayTask* display, String& er
             }
             done += n;
             esp_task_wdt_reset();
+            // Update.write can occupy this core continuously just like the
+            // backup path above. Let the watched idle task run as well.
+            delay(1);
         }
         if (done != size) {
             Update.abort();

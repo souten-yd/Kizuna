@@ -6,14 +6,18 @@
 
 - CoreS3 is now the default target. It uses the built-in ES7210 microphone at
   16 kHz, AW88298 speaker path, touch button zones and native USB CDC.
-- CoreS3 gets a permanent six-icon touch rail on the right edge: hold-to-talk,
-  volume, mute, brightness, sleep and long-press settings reset. Active talk,
-  mute and sleep states light up, volume shows its level, and holding the gear
-  at power-on opens provisioning.
-- The character composition is shifted 20 px left and clipped to the 280 px
+- CoreS3 gets a permanent four-control touch rail on the right edge. Its larger
+  52 x 60 px targets combine volume/mute and brightness/screen-off as tap/hold
+  gestures, alongside hold-to-talk and settings. The vector icons and active
+  accents have been redrawn for the wider controls; holding the gear at power-on
+  still opens provisioning and holding it for 3.5 seconds still resets.
+- The character composition is shifted 26 px left and clipped to the 268 px
   content viewport, keeping it visually centred beside the touch rail. The rail
   is now redrawn only for a press or a relevant state change, eliminating the
   flicker caused by repainting it over every character update.
+- Firmware backup and restore yield between 4 KiB flash/SD chunks. Feeding the
+  loop task watchdog alone left IDLE0 starved and caused a `task_wdt` restart
+  about 62 seconds after an OTA update, just as the proven image was backed up.
 - M5GO-only protection workarounds are disabled on CoreS3: no IP5306 boost
   register write, battery load shedding, 150 ms uplink holdoff, ADC busy-wait
   watchdog override or GPIO15 NeoPixel traffic. OTA rollback and boot-loop safe

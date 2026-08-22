@@ -9,7 +9,7 @@ server on your network is the head - speech recognition, a language model,
 speech synthesis. The device keeps working when the server does not.
 
 ```
-        hold A ──▶ LISTENING ──▶ THINKING ──▶ SPEAKING ──▶ IDLE
+     hold mic ──▶ LISTENING ──▶ THINKING ──▶ SPEAKING ──▶ IDLE
                       │              │            │
                    mic 16 kHz      STT+LLM      TTS + lip sync
 ```
@@ -48,15 +48,16 @@ just says OFFLINE in the status bar.
 
 ## Controls
 
-CoreS3 has a six-icon touch bar down the right edge of the screen.
+CoreS3 has four large touch controls down the right edge of the screen. A short
+tap changes a setting; a deliberate hold invokes the paired quiet/off action.
 
 | Icon | Action |
 |---|---|
 | Microphone, hold | Push to talk; release to send |
-| Speaker | Volume, five steps, wrapping |
-| Muted speaker | Mute / unmute |
-| Sun | Cycle screen brightness |
-| Moon | Sleep / wake |
+| Speaker, tap | Volume, five steps, wrapping |
+| Speaker, hold | Mute / unmute |
+| Sun, tap | Cycle screen brightness |
+| Sun, hold | Screen completely off / on |
 | Gear, hold 3.5 s | Clear settings and reboot |
 | Gear at power-on | Wi-Fi setup portal |
 

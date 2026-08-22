@@ -50,4 +50,5 @@ private:
     bool volumeStep_ = false;
     touchui::Action touchAction_ = touchui::Action::None;
     uint32_t touchStartedMs_ = 0;
+    bool touchLongActionFired_ = false;
 };
